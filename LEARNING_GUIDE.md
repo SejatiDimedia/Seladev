@@ -11,6 +11,11 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 4. [Validasi Data Terbagi (Shared Zod Validators)](#4-validasi-data-terbagi-shared-zod-validators)
 5. [Sistem Penanganan Error Terpusat](#5-sistem-penanganan-error-terpusat)
 6. [Desain Token CSS & Glassmorphic UI](#6-desain-token-css--glassmorphic-ui)
+7. [Keamanan Autentikasi: Token Rotation & RBAC Dua Tingkat](#7-keamanan-autentikasi-token-rotation--rbac-dua-tingkat)
+8. [Resolusi Kompilasi & Trik TypeScript Monorepo](#8-resolusi-kompilasi--trik-typescript-monorepo)
+9. [Keamanan MFA / TOTP & Enkripsi AES-256-GCM](#9-keamanan-mfa--totp-enkripsi-aes-256-gcm)
+10. [Manajemen Proyek, Lingkungan (Environments), dan Keanggotaan Proyek](#10-manajemen-proyek-lingkungan-environments-dan-keanggotaan-proyek)
+11. [Manajemen Secrets & Riwayat Versi (Secrets & Versioning)](#11-manajemen-secrets--riwayat-versi-secrets--versioning)
 
 ---
 
@@ -424,5 +429,40 @@ Variabel lingkungan non-sensitif (seperti `API_URL` atau feature flags) disimpan
   Seorang Admin Organisasi (`org:admin`) tidak harus terdaftar sebagai anggota proyek untuk mengelolanya; middleware `authorizeRbac` mendeteksi ini dan meloloskan akses secara otomatis.
 * **Pencegahan Administratif Buntu (Sole Admin Safety)**:
   Sistem melarang pencabutan peran `admin` proyek atau penghapusan pengguna dari proyek jika ia merupakan **satu-satunya administrator aktif** yang tersisa di proyek tersebut. Hal ini menghalangi terjadinya situasi di mana sebuah proyek tidak lagi memiliki pengelola administratif yang aktif.
+
+---
+
+## 11. Manajemen Secrets & Riwayat Versi (Secrets & Versioning)
+
+Modul **Secrets & Versioning** (Phase 1.3 & Phase 2.3) menerapkan perlindungan kriptografi kelas industri untuk data konfigurasi sensitif. Berikut adalah konsep penting yang harus dipelajari:
+
+### A. Kunci Enkripsi Turunan Organisasi (Per-Org Derived Keys)
+Untuk menghindari satu kunci enkripsi yang sama bagi semua data pelanggan, kita menggunakan kunci turunan per organisasi:
+* **Rumus Derivasi Kunci**:
+  `derivedKey = HMAC-SHA256(MASTER_ENCRYPTION_KEY, organizationId)`
+* **Keuntungan Keamanan**:
+  1. Isolasi dampak kebocoran (*blast radius isolation*): Jika kunci turunan suatu organisasi bocor, data rahasia milik organisasi lain tetap sepenuhnya aman karena dienkripsi dengan kunci yang berbeda.
+  2. Tanpa penyimpanan kunci: Kunci turunan tidak pernah disimpan di database melainkan diturunkan secara instan dalam memori ketika dibutuhkan menggunakan rahasia utama (`MASTER_ENCRYPTION_KEY`) dan `organizationId`.
+
+### B. Enkripsi AES-256-GCM Terotentikasi
+Kita menggunakan algoritma **AES-256-GCM** yang menghasilkan tiga komponen utama:
+1. **Ciphertext**: Nilai asli yang terenkripsi dalam format base64.
+2. **Initialization Vector (IV)**: Salt acak 12-byte yang menjamin bahwa teks yang sama jika dienkripsi ulang tidak akan menghasilkan ciphertext yang sama.
+3. **Authentication Tag**: Kode autentikasi 16-byte yang dibuat selama enkripsi. Saat dekripsi, tag ini digunakan untuk memastikan data tidak dimodifikasi secara ilegal oleh pihak ketiga (*tampering detection*). Jika data dirusak, operasi dekripsi akan melempar error dan gagal total.
+
+### C. Pemisahan endpoint List & Reveal
+* **List (Masked)**: Endpoint daftar rahasia (`GET /projects/:projectId/environments/:envId/secrets`) mengembalikan seluruh metadata namun menyembunyikan nilai asli dengan menggantinya menjadi `value: "****"`. Ini mencegah pencurian data massal secara tidak sengaja oleh skrip pemantau atau kegagalan log.
+* **Reveal (Explicit Decrypt)**: Pengungkapan nilai asli memerlukan pemanggilan endpoint tersendiri secara eksplisit (`POST /projects/:projectId/secrets/:secretId/reveal`). Hal ini mempermudah pencatatan audit log yang tepat untuk mencatat siapa saja manusia/aktor yang benar-benar melihat rahasia tersebut.
+
+### D. Proteksi Protected Environment
+Aturan keamanan diperketat berdasarkan status proteksi lingkungan (`isProtected`):
+* Pada **standard environment** (seperti `development` atau `staging`), pengembang biasa (`project:developer`) diperbolehkan membuat, memutus, mengubah, dan melihat nilai rahasia untuk mempermudah pengerjaan lokal.
+* Pada **protected environment** (seperti `production`), pengembang biasa diblokir dengan respons `403 Forbidden` (`ForbiddenError`) jika mencoba mengungkap (reveal) atau memodifikasi rahasia. Hanya pemilik peran administratif (`project:admin` atau `org:admin/owner`) yang diizinkan untuk melakukannya.
+
+### E. Immutability & Riwayat Versi (Versioning)
+Setiap kali rahasia ditulis atau diperbarui:
+1. Bidang versi (`version`) dalam dokumen `Secret` dinaikkan secara berurutan (*monotonic version counter*).
+2. Dokumen versi lama disimpan secara permanen dan tidak dapat diubah (*immutable history*) di dalam koleksi `SecretVersion`.
+3. Saat melakukan **Rollback** (`POST /projects/:projectId/secrets/:secretId/rollback`), rahasia utama akan memulihkan data enkripsinya ke versi target tertentu. Tindakan rollback ini sendiri dicatat sebagai versi baru yang bertambah (misalnya, me-rollback versi 2 ke versi 1 pada secret berversi 3 akan menghasilkan versi baru yaitu 4) untuk mempertahankan audit trail yang bersih dari semua perubahan historis.
 
 

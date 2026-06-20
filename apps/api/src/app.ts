@@ -10,6 +10,7 @@ import { config } from './config';
 import { MongooseAuthRepository, AuthService, AuthController, initAuthRoutes } from './features/auth';
 import { MongooseOrganizationsRepository, OrganizationsService, OrganizationsController, initOrganizationsRoutes } from './features/organizations';
 import { MongooseProjectsRepository, ProjectsService, ProjectsController, initProjectsRoutes } from './features/projects';
+import { MongooseSecretsRepository, SecretsService, SecretsController, initSecretsRoutes } from './features/secrets';
 
 
 export function createApp(): express.Application {
@@ -66,10 +67,16 @@ export function createApp(): express.Application {
   const projectsController = new ProjectsController(projectsService);
   const projectsRoutes = initProjectsRoutes(projectsController);
 
+  const secretsRepo = new MongooseSecretsRepository();
+  const secretsService = new SecretsService(secretsRepo, projectsRepo);
+  const secretsController = new SecretsController(secretsService, projectsService);
+  const secretsRoutes = initSecretsRoutes(secretsController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
   app.use('/api/v1', projectsRoutes);
+  app.use('/api/v1', secretsRoutes);
 
 
   // Health check routes

@@ -115,6 +115,27 @@ Kami menyelesaikan beberapa hambatan kompilasi TypeScript agar seluruh workspace
 
 ---
 
+### 5.3 Secrets Management & Secret Versioning (Phase 1.3 & Phase 2.3)
+Kami merancang dan mengimplementasikan fitur manajemen rahasia terenkripsi (Secrets) dan pelacakan versi rahasia (Secret Versioning) secara terisolasi dan aman:
+- **Enkripsi Kunci Turunan Organisasi (Per-Org Derived Keys)**:
+  - Secrets dienkripsi dengan algoritma **AES-256-GCM**.
+  - Kunci enkripsi diturunkan secara dinamis menggunakan **HMAC-SHA256** dari `MASTER_ENCRYPTION_KEY` dan `organizationId`. Hal ini membatasi dampak kebocoran (*blast radius isolation*) di tingkat organisasi tanpa perlu menyimpan kunci per-organisasi di database.
+  - Setiap enkripsi menggunakan **Initialization Vector (IV) 12-byte acak** dan menghasilkan **Authentication Tag 16-byte** untuk mendeteksi perubahan data ilegal secara real-time (*tampering detection*).
+- **Masking pada Operasi List & Reveal Terpisah**:
+  - `GET /projects/:projectId/environments/:envId/secrets` mengembalikan daftar rahasia dengan nilai terselubung (`value: "****"`) untuk semua peran. Teks asli tidak pernah dikirim pada operasi pencarian massal.
+  - `POST /projects/:projectId/secrets/:secretId/reveal` didekripsikan secara eksplisit dan hanya mengembalikan nilai asli ke klien jika pengguna memiliki otorisasi yang sah.
+- **Proteksi Tingkat Lingkungan (Environment Protection)**:
+  - Perubahan (create/update/delete) dan pengungkapan (reveal) rahasia di dalam protected environment (seperti `production`) dibatasi hanya untuk pengguna dengan wewenang administrator (`project:admin` atau `org:admin/owner`).
+  - Pengembang biasa (`project:developer`) diperbolehkan melihat metadata rahasia (list), namun ditolak jika mencoba melakukan reveal atau modifikasi.
+- **Riwayat Versi (Versioning) & Rollback**:
+  - Setiap operasi penulisan (create/update/rollback) secara otomatis meningkatkan nomor versi dan menyisipkan dokumen versi immutable baru ke dalam koleksi `secretversions`.
+  - Operasi rollback (`POST /projects/:projectId/secrets/:secretId/rollback`) memulihkan nilai rahasia ke versi lama tertentu. Tindakan ini dicatat sebagai versi baru (misal memulihkan v1 pada secret berversi v3 akan membuat v4 dengan nilai sama dengan v1) untuk menjaga konsistensi sejarah penulisan rahasia.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 15 skenario tes integrasi menyeluruh di `src/features/secrets/__tests__/secrets.test.ts` untuk memverifikasi fungsionalitas enkripsi GCM, batasan role berdasarkan tipe environment, perputaran versi, rollback, dan penghapusan kaskade. Seluruh skenario tes berhasil lulus cleanly.
+
+---
+
+
 ## Langkah Menjalankan Secara Lokal
 1. Pastikan Docker Engine / Docker Desktop Anda aktif.
 2. Jalankan database:
@@ -127,3 +148,4 @@ Kami menyelesaikan beberapa hambatan kompilasi TypeScript agar seluruh workspace
    ```
    - API Server: `http://localhost:4000`
    - Web App: `http://localhost:3000` (atau port 5173 jika berjalan standalone)
+

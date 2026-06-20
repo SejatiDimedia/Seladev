@@ -1,0 +1,319 @@
+import type { SecretsRepository } from './secrets.repository';
+import type { ProjectsRepository } from '../projects/projects.repository';
+import { 
+  ConflictError, 
+  NotFoundError, 
+  ForbiddenError 
+} from '../../lib/errors';
+import { encryptGcm, decryptGcm } from '../../lib/crypto';
+import type { SecretDocument } from '../../infrastructure/database/models/secret.model';
+import type { SecretVersionDocument } from '../../infrastructure/database/models/secret-version.model';
+
+export class SecretsService {
+  constructor(
+    private readonly secretsRepo: SecretsRepository,
+    private readonly projectsRepo: ProjectsRepository
+  ) {}
+
+  /**
+   * Helper to check access for reading/revealing secrets.
+   */
+  private async checkReadAccess(
+    user: { id: string; role: string; projectRole?: string },
+    environmentId: string
+  ): Promise<void> {
+    const env = await this.projectsRepo.findEnvironmentById(environmentId);
+    if (!env) {
+      throw new NotFoundError('Environment', environmentId);
+    }
+
+    const isOrgAdmin = user.role === 'owner' || user.role === 'admin';
+    const isProjAdmin = user.projectRole === 'admin';
+    const isDeveloper = user.projectRole === 'developer';
+
+    if (env.isProtected) {
+      // In protected environments (e.g. production), only project admins and org admins/owners can reveal secrets
+      if (!isOrgAdmin && !isProjAdmin) {
+        throw new ForbiddenError('Only project admins can reveal secrets in protected environments');
+      }
+    } else {
+      // In standard environments, project developers are also allowed
+      if (!isOrgAdmin && !isProjAdmin && !isDeveloper) {
+        throw new ForbiddenError('You do not have permission to reveal secrets in this environment');
+      }
+    }
+  }
+
+  /**
+   * Helper to check access for writing (create/update/delete/rollback) secrets.
+   */
+  private async checkWriteAccess(
+    user: { id: string; role: string; projectRole?: string },
+    environmentId: string
+  ): Promise<void> {
+    const env = await this.projectsRepo.findEnvironmentById(environmentId);
+    if (!env) {
+      throw new NotFoundError('Environment', environmentId);
+    }
+
+    const isOrgAdmin = user.role === 'owner' || user.role === 'admin';
+    const isProjAdmin = user.projectRole === 'admin';
+    const isDeveloper = user.projectRole === 'developer';
+
+    if (env.isProtected) {
+      // In protected environments, only project admins and org admins/owners can modify secrets
+      if (!isOrgAdmin && !isProjAdmin) {
+        throw new ForbiddenError('Only project admins can write secrets in protected environments');
+      }
+    } else {
+      // In standard environments, project developers are allowed
+      if (!isOrgAdmin && !isProjAdmin && !isDeveloper) {
+        throw new ForbiddenError('You do not have permission to write secrets in this environment');
+      }
+    }
+  }
+
+  async createSecret(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    environmentId: string,
+    key: string,
+    value: string,
+    expiresAt?: Date | null
+  ): Promise<SecretDocument> {
+    // 1. Verify project exists
+    const project = await this.projectsRepo.findProjectById(projectId);
+    if (!project) {
+      throw new NotFoundError('Project', projectId);
+    }
+
+    // 2. Verify environment exists and belongs to the project
+    const env = await this.projectsRepo.findEnvironmentById(environmentId);
+    if (!env || env.projectId.toString() !== projectId) {
+      throw new NotFoundError('Environment', environmentId);
+    }
+
+    // 3. Enforce write access control
+    await this.checkWriteAccess(user, environmentId);
+
+    // 4. Validate unique key name in environment
+    const upperKey = key.toUpperCase();
+    const existing = await this.secretsRepo.findSecretByKey(environmentId, upperKey);
+    if (existing) {
+      throw new ConflictError(`Secret with key "${upperKey}" already exists in this environment`);
+    }
+
+    // 5. Encrypt secret
+    const orgId = project.organizationId.toString();
+    const payload = encryptGcm(value, orgId);
+
+    // 6. Create secret document
+    const secret = await this.secretsRepo.createSecret({
+      organizationId: orgId,
+      projectId,
+      environmentId,
+      key: upperKey,
+      encryptedValue: payload.ciphertext,
+      iv: payload.iv,
+      authTag: payload.authTag,
+      keyVersion: 1,
+      createdBy: user.id,
+      expiresAt: expiresAt || null,
+    });
+
+    // 7. Create secret version document (Phase 2.3 version history)
+    await this.secretsRepo.createSecretVersion({
+      secretId: secret.id,
+      organizationId: orgId,
+      encryptedValue: payload.ciphertext,
+      iv: payload.iv,
+      authTag: payload.authTag,
+      keyVersion: 1,
+      version: 1,
+      createdBy: user.id,
+    });
+
+    return secret;
+  }
+
+  async listSecrets(
+    _user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    environmentId: string
+  ): Promise<SecretDocument[]> {
+    // 1. Verify environment exists and belongs to project
+    const env = await this.projectsRepo.findEnvironmentById(environmentId);
+    if (!env || env.projectId.toString() !== projectId) {
+      throw new NotFoundError('Environment', environmentId);
+    }
+
+    // 2. List secrets metadata (no permission check needed beyond standard rbac router middleware)
+    return this.secretsRepo.listSecretsByEnv(environmentId);
+  }
+
+  async getSecretMetadata(
+    _user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string
+  ): Promise<SecretDocument> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+    return secret;
+  }
+
+  async revealSecret(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string
+  ): Promise<{ secret: SecretDocument; plaintextValue: string }> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+
+    // Enforce read access (reveal) control
+    await this.checkReadAccess(user, secret.environmentId.toString());
+
+    // Decrypt GCM payload
+    const plaintextValue = decryptGcm(
+      {
+        ciphertext: secret.encryptedValue,
+        iv: secret.iv,
+        authTag: secret.authTag,
+      },
+      secret.organizationId.toString()
+    );
+
+    // Update last accessed
+    secret.lastAccessedAt = new Date();
+    await secret.save();
+
+    return { secret, plaintextValue };
+  }
+
+  async updateSecret(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string,
+    value: string
+  ): Promise<SecretDocument> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+
+    // Enforce write access control
+    await this.checkWriteAccess(user, secret.environmentId.toString());
+
+    // Encrypt new value
+    const payload = encryptGcm(value, secret.organizationId.toString());
+
+    const newVersion = secret.version + 1;
+
+    // Update secret fields
+    secret.encryptedValue = payload.ciphertext;
+    secret.iv = payload.iv;
+    secret.authTag = payload.authTag;
+    secret.version = newVersion;
+    await secret.save();
+
+    // Create a new version document (Phase 2.3 version history)
+    await this.secretsRepo.createSecretVersion({
+      secretId: secret.id,
+      organizationId: secret.organizationId.toString(),
+      encryptedValue: payload.ciphertext,
+      iv: payload.iv,
+      authTag: payload.authTag,
+      keyVersion: secret.keyVersion,
+      version: newVersion,
+      createdBy: user.id,
+    });
+
+    return secret;
+  }
+
+  async deleteSecret(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string
+  ): Promise<void> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+
+    // Enforce write access control
+    await this.checkWriteAccess(user, secret.environmentId.toString());
+
+    // Hard delete secret
+    await this.secretsRepo.deleteSecret(secretId);
+
+    // Cascade delete versions
+    await this.secretsRepo.deleteSecretVersions(secretId);
+  }
+
+  // Versioning & Rollback operations (Phase 2.3)
+  async listSecretVersions(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string
+  ): Promise<SecretVersionDocument[]> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+
+    // Listing version metadata requires reveal/read access check since it is restricted to those who can see secret info
+    await this.checkReadAccess(user, secret.environmentId.toString());
+
+    return this.secretsRepo.listSecretVersions(secretId);
+  }
+
+  async rollbackSecret(
+    user: { id: string; role: string; projectRole?: string },
+    projectId: string,
+    secretId: string,
+    versionNumber: number
+  ): Promise<SecretDocument> {
+    const secret = await this.secretsRepo.findSecretById(secretId);
+    if (!secret || secret.projectId.toString() !== projectId) {
+      throw new NotFoundError('Secret', secretId);
+    }
+
+    // Enforce write access control (rollback is a write operation)
+    await this.checkWriteAccess(user, secret.environmentId.toString());
+
+    // Retrieve all versions and locate target
+    const versions = await this.secretsRepo.listSecretVersions(secretId);
+    const targetVersion = versions.find(v => v.version === versionNumber);
+    if (!targetVersion) {
+      throw new NotFoundError('Secret Version', versionNumber.toString());
+    }
+
+    const newVersion = secret.version + 1;
+
+    // Rollback secret values to target version
+    secret.encryptedValue = targetVersion.encryptedValue;
+    secret.iv = targetVersion.iv;
+    secret.authTag = targetVersion.authTag;
+    secret.keyVersion = targetVersion.keyVersion;
+    secret.version = newVersion;
+    await secret.save();
+
+    // Create a new version document recording the rollback write
+    await this.secretsRepo.createSecretVersion({
+      secretId: secret.id,
+      organizationId: secret.organizationId.toString(),
+      encryptedValue: targetVersion.encryptedValue,
+      iv: targetVersion.iv,
+      authTag: targetVersion.authTag,
+      keyVersion: targetVersion.keyVersion,
+      version: newVersion,
+      createdBy: user.id,
+    });
+
+    return secret;
+  }
+}
