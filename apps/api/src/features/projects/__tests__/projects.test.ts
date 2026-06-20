@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { ProjectsService } from '../projects.service';
 import type { ProjectsRepository } from '../projects.repository';
 import type { OrganizationsRepository } from '../../organizations/organizations.repository';
-import { ConflictError, NotFoundError, ValidationError, ForbiddenError } from '../../../lib/errors';
+import { ConflictError, ValidationError, ForbiddenError } from '../../../lib/errors';
 import type { ProjectRole } from '../projects.types';
 
 // Helpers to mock Mongoose-like documents
@@ -257,19 +257,19 @@ class InMemoryOrganizationsRepository implements OrganizationsRepository {
     return this.memberships.filter(m => m.organizationId === orgId);
   }
 
-  async updateMembership(id: string, update: Partial<any>): Promise<any | null> {
+  async updateMembership(_id: string, _update: Partial<any>): Promise<any | null> {
     return null;
   }
 
-  async deleteMembership(id: string): Promise<boolean> {
+  async deleteMembership(_id: string): Promise<boolean> {
     return false;
   }
 
-  async countOrgMembers(orgId: string): Promise<number> {
+  async countOrgMembers(_orgId: string): Promise<number> {
     return 0;
   }
 
-  async findUserByEmail(email: string): Promise<any | null> {
+  async findUserByEmail(_email: string): Promise<any | null> {
     return null;
   }
 }
@@ -319,12 +319,10 @@ describe('Projects and Environments Module Tests', () => {
       expect(project.organizationId).toBe(mockOrg.id);
 
       // Verify defaults
-      // 1. Creator is added as project admin
       const member = await projectsRepo.findProjectMember(project.id, mockUserId);
       expect(member).not.toBeNull();
       expect(member.role).toBe('admin');
 
-      // 2. Default environments are provisioned
       const environments = await projectsRepo.listEnvironmentsByProject(project.id);
       expect(environments).toHaveLength(3);
       const dev = environments.find(e => e.slug === 'development');
@@ -345,7 +343,12 @@ describe('Projects and Environments Module Tests', () => {
     });
 
     it('should reject creation if project slug already exists within organization', async () => {
-      const dto = { name: 'Payment API' };
+      const dto = {
+        name: 'Payment API',
+        description: '',
+        visibility: 'private' as const,
+        tags: [],
+      };
       await projectsService.createProject(mockUserId, 'acme-corp', dto);
 
       await expect(
@@ -354,12 +357,12 @@ describe('Projects and Environments Module Tests', () => {
     });
 
     it('should reject creation if organization project limit is exceeded', async () => {
-      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 1' });
-      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 2' });
-      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 3' });
+      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 1', description: '', visibility: 'private', tags: [] });
+      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 2', description: '', visibility: 'private', tags: [] });
+      await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 3', description: '', visibility: 'private', tags: [] });
 
       await expect(
-        projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 4' })
+        projectsService.createProject(mockUserId, 'acme-corp', { name: 'Proj 4', description: '', visibility: 'private', tags: [] })
       ).rejects.toThrow(ValidationError);
     });
   });
@@ -368,7 +371,7 @@ describe('Projects and Environments Module Tests', () => {
     let project: any;
 
     beforeEach(async () => {
-      project = await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Core API' });
+      project = await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Core API', description: '', visibility: 'private', tags: [] });
     });
 
     it('should create custom environment with correct mappings', async () => {
@@ -393,7 +396,7 @@ describe('Projects and Environments Module Tests', () => {
 
       const updated = await projectsService.updateEnvironmentVariables(project.id, devEnv.id, variables);
       expect(updated.variables).toHaveLength(2);
-      expect(updated.variables[0].key).toBe('API_URL');
+      expect((updated.variables as any)[0].key).toBe('API_URL');
     });
 
     it('should fail variable updates if duplicate keys are provided', async () => {
@@ -451,7 +454,7 @@ describe('Projects and Environments Module Tests', () => {
     const targetUser = 'user-abc';
 
     beforeEach(async () => {
-      project = await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Core API' });
+      project = await projectsService.createProject(mockUserId, 'acme-corp', { name: 'Core API', description: '', visibility: 'private', tags: [] });
     });
 
     it('should add project members', async () => {

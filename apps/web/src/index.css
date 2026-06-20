@@ -41,15 +41,47 @@
     border-color: hsl(var(--border));
   }
   body {
-    background-color: hsl(var(--background));
-    color: hsl(var(--foreground));
-    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: #f9f9fa; /* Editorial Light Theme background default */
+    color: #1a1c1d;            /* Editorial Light Theme on-background default */
+    font-family: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 }
 
-/* Glassmorphism utility */
+/* Material Symbols Outlined Custom Variations */
+.material-symbols-outlined {
+  font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Editorial 12-column grid layout */
+.editorial-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 24px;
+}
+
+/* Hide scrollbar utility */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Custom editorial interactions */
+.project-card:hover .project-title {
+  color: #FF6B6B; /* accent-coral */
+}
+
+.project-card {
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+}
+
+.project-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Glassmorphism utility (kept from bootstrap for flexibility) */
 .glass-panel {
   background: rgba(15, 15, 20, 0.7);
   backdrop-filter: blur(12px);
@@ -81,10 +113,11 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted));
+  background: #e0dfdf; /* secondary-container */
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--accent));
+  background: #77767b; /* outline */
 }
+
