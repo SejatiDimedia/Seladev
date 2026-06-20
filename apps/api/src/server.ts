@@ -4,6 +4,7 @@ import { config } from './config';
 import { connectDatabase, disconnectDatabase } from './config/database';
 import { connectRedis, disconnectRedis } from './config/redis';
 import { initSocketServer } from './config/socket';
+import { startAllWorkers, stopAllWorkers } from './workers';
 
 async function startServer(): Promise<void> {
   const port = config.server.port;
@@ -24,6 +25,9 @@ async function startServer(): Promise<void> {
     // 5. Initialize Socket.IO Server
     initSocketServer(server);
 
+    // 5.1 Start BullMQ Workers
+    startAllWorkers();
+
     // 6. Start listening
     server.listen(port, () => {
       console.log(`🚀 SELADEV API Control Plane running in ${config.server.env} mode on http://localhost:${port}`);
@@ -38,6 +42,7 @@ async function startServer(): Promise<void> {
       });
 
       try {
+        await stopAllWorkers();
         await disconnectRedis();
         await disconnectDatabase();
         console.log('💚 Graceful shutdown complete. Exiting.');

@@ -151,8 +151,29 @@ Kami merancang dan mengimplementasikan fitur autentikasi mesin-ke-mesin mengguna
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 15 skenario tes integrasi menyeluruh di `src/features/api-keys/__tests__/api-keys.test.ts` untuk menguji pembuatan, hashing, penonaktifan, pembatasan scope, dan penolakan akses lintas proyek/lingkungan. Seluruh tes berhasil lulus (total **49 passed tests** di seluruh suite).
 
----
+### 5.5 Deployments Module & BullMQ Simulated Pipeline (Phase 3.5)
+Kami merancang dan mengimplementasikan modul Deployment terintegrasi untuk menangani pipeline pembangunan (build pipeline) berbasis simulasi, lengkap dengan notifikasi real-time dan mekanisme persetujuan manual:
+- **Model & Skema Mongoose (`deployment.model.ts`)**:
+  - Menyimpan metadata deployment lengkap termasuk `organizationId`, `projectId`, `environmentId`, `version`, `branch`, `commitSha`, `commitMessage`, `status`, `statusHistory`, `triggeredBy`, `triggeredVia`, `buildLogs`, `duration`, `errorMessage`, dan `completedAt`.
+  - Dilengkapi dengan *compound index* `{ projectId: 1, _id: -1 }` untuk memfasilitasi pencarian riwayat deployment secara urut dan efisien.
+- **Antrean Pekerjaan BullMQ & In-Process Workers (`config/queue.ts` & `workers/deployment.worker.ts`)**:
+  - Mengonfigurasi antrean BullMQ (`deployments`) yang terikat ke koneksi Redis.
+  - Untuk lingkungan non-produksi (development/test), worker otomatis berjalan *in-process* di dalam proses utama server Express saat server melakukan booting (`startAllWorkers` di `server.ts`).
+- **Simulasi Siklus Hidup & Socket.IO Streaming Logs**:
+  - Worker menyimulasikan build pipeline melalui serangkaian transisi status: `queued` ➔ `building` ➔ `deploying` ➔ `success` / `failed`.
+  - Selama fase `building` dan `deploying`, log build ditulis secara berkala ke database dan dipancarkan (*broadcast*) secara real-time ke room Socket.IO organisasi (`org:${orgId}`) dengan format event `deployment:log` dan `deployment:status_changed`.
+  - Socket.IO handshake dikonfigurasi untuk memvalidasi JWT token dan secara otomatis memasukkan klien ke room organisasi yang sesuai (`org:${orgId}`).
+- **Mekanisme Persetujuan Manual (Manual Approval Gate)**:
+  - Jika suatu environment bertipe dilindungi (`isProtected: true`) dan pengaturan proteksi proyek diaktifkan (`settings.deploymentProtection: true`), deployment baru yang di-trigger akan tertahan dengan status `pending_approval`.
+  - Hanya pengguna dengan peran administratif (`project:admin` atau `org:admin/owner`) yang diizinkan menyetujui (`POST /projects/:projectId/deployments/:id/approve`) untuk memasukkannya ke antrean BullMQ, atau menolaknya (`POST /projects/:projectId/deployments/:id/reject`) untuk membatalkan proses deployment.
+- **Pengecekan Pembatalan (Cancellation Checkpoints)**:
+  - Pengguna dapat membatalkan deployment yang sedang berjalan.
+  - Jika pekerjaan masih berada dalam antrean BullMQ (status `queued`), pekerjaan dihapus langsung dari antrean BullMQ.
+  - Jika pekerjaan sudah berjalan (status `building`), server menuliskan flag pembatalan di Redis (`deployment:cancel:${id}`). Worker secara berkala mengecek flag ini di setiap checkpoint transisi status dan menghentikan proses secara anggun (*graceful cancellation*) jika bendera pembatalan terdeteksi.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 11 skenario tes integrasi komprehensif di `src/features/deployments/__tests__/deployments.test.ts` untuk memverifikasi fungsionalitas antrean BullMQ, pembatalan, validasi cabang (*branch validation*), persetujuan manual pada protected environment, dan pagination kursor. Seluruh tes berhasil lulus dengan bersih.
 
+---
 
 ## Langkah Menjalankan Secara Lokal
 1. Pastikan Docker Engine / Docker Desktop Anda aktif.

@@ -18,6 +18,7 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 11. [Manajemen Secrets & Riwayat Versi (Secrets & Versioning)](#11-manajemen-secrets--riwayat-versi-secrets--versioning)
 12. [Modul API Keys & Autentikasi Mesin-ke-Mesin (Machine-to-Machine Auth)](#12-modul-api-keys--autentikasi-mesin-ke-mesin-machine-to-machine-auth)
 13. [Pembatasan Lingkup API Keys (Project & Environment Scoping)](#13-pembatasan-lingkup-api-keys-project--environment-scoping)
+14. [Modul Deployments, Antrean BullMQ, dan Socket.IO Real-time Logs](#14-modul-deployments-antrean-bullmq-dan-socketio-real-time-logs)
 
 ---
 
@@ -504,3 +505,63 @@ Hal ini mencegah eskalasi hak istimewa (*privilege escalation*). Jika admin memb
 ### C. Pembatasan Lingkup Lingkungan (Environment Scoping)
 * Phase 4.4 menambahkan dukungan `environmentId` opsional untuk membatasi API Key hanya pada lingkungan tertentu saja (misalnya hanya boleh membaca/menulis secrets di lingkungan `development`).
 * Aturan ini ditegakkan di dalam `SecretsService` secara ketat pada setiap operasi baca/tulis rahasia. Jika API Key mencoba mengakses rahasia di lingkungan lain, ia akan langsung ditolak dengan `ForbiddenError`.
+
+---
+
+## 14. Modul Deployments, Antrean BullMQ, dan Socket.IO Real-time Logs
+
+Modul **Deployments** (Phase 3.5) menangani deployment aplikasi terotomatisasi secara in-process dan real-time. Bagian ini mencakup beberapa konsep penting yang wajib dipelajari:
+
+### A. Pengelolaan State Deployment (Deployment Lifecycle)
+Deployment memiliki siklus hidup yang terdefinisi dengan jelas di dalam database (`status` field):
+- `pending_approval`: Deployment tertahan menunggu persetujuan admin (hanya berlaku jika proteksi deployment aktif di environment terproteksi).
+- `queued`: Deployment berhasil dibuat dan dimasukkan ke antrean BullMQ Redis.
+- `building`: Worker BullMQ telah mengambil pekerjaan dan memulai proses build (seperti instalasi dependensi, kompilasi kode).
+- `deploying`: Kode berhasil dikompilasi dan sedang diunggah/di-deploy ke server target.
+- `success`: Proses deployment selesai dengan sukses.
+- `failed`: Proses build atau deploy mengalami kegagalan.
+- `cancelled`: Proses dibatalkan oleh pengguna (baik secara manual saat pending/queued, atau dihentikan saat building).
+
+Setiap transisi status mencatat objek event di dalam `statusHistory` untuk analisis performa (durasi setiap fase).
+
+### B. BullMQ & Penjadwalan Job Asinkron
+BullMQ adalah pustaka antrean pekerjaan (job queue) berkinerja tinggi untuk Node.js yang didukung oleh Redis.
+* **Mengapa BullMQ?** Menggunakan antrean asinkron membebaskan server API Express dari beban berat kompilasi kode. Saat user memicu deployment, server langsung merespons dengan status `queued` dalam hitungan milidetik, sementara kompilasi yang memakan waktu beberapa menit diproses di latar belakang oleh *Worker process*.
+* **In-Process Bootstrapping**:
+  Untuk development lokal yang mudah dijalankan (onboarding cepat), kita menjalankan Worker secara in-process pada lingkungan non-produksi:
+  ```typescript
+  if (config.server.env !== 'production') {
+    startDeploymentWorker();
+  }
+  ```
+  Ini berarti satu proses node mengeksekusi server API sekaligus mendengarkan antrean pekerjaan BullMQ tanpa memerlukan proses server terpisah.
+
+### C. Aliran Log Real-time via Socket.IO
+Klien (dashboard frontend) memerlukan umpan balik log build secara real-time (seperti streaming log Vercel atau GitHub Actions).
+* **JWT Handshake & Room Join**:
+  Ketika koneksi websocket dibuat, server memvalidasi JWT token pengguna, mengambil data keanggotaan organisasi, dan otomatis memasukkan koneksi tersebut ke room Socket.IO berdasarkan organisasi:
+  ```typescript
+  socket.join(`org:${orgId}`);
+  ```
+  Hal ini menjamin isolasi keamanan multi-tenant: pengguna dari organisasi A tidak dapat mendengar log deployment dari organisasi B.
+* **Broadcasting Logs**:
+  Saat worker memproses tahapan build, ia memancarkan event `deployment:log` berisi baris teks log secara real-time ke room organisasi tersebut:
+  ```typescript
+  io.to(`org:${orgId}`).emit('deployment:log', { deploymentId, log: line });
+  ```
+
+### D. Mekanisme Pembatalan Deployment (Cancellation Checkpoints)
+Membatalkan pekerjaan asinkron yang sedang berjalan di background worker memiliki tantangan tersendiri. Kita menyelesaikannya menggunakan dua cara tergantung status pekerjaan:
+1. **Queued**: Jika status masih dalam antrean (`queued`), kita dapat mengambil referensi pekerjaan dari BullMQ dan memanggil `job.remove()` untuk membatalkannya sebelum berjalan.
+2. **Building (Redis Cancellation Flag)**:
+   Jika pekerjaan sudah terlanjur berjalan di worker (`building`), kita tidak bisa menghentikan thread eksekusi JavaScript secara paksa begitu saja.
+   - **Solusi**: Server API menuliskan flag pembatalan di Redis: `SET deployment:cancel:${id} 1 EX 600`.
+   - **Worker Checkpoint**: Di dalam loop simulasi build, worker secara berkala memeriksa kunci pembatalan di Redis:
+     ```typescript
+     const isCancelled = await redis.get(`deployment:cancel:${deploymentId}`);
+     if (isCancelled) {
+       // Hentikan proses secara anggun (graceful stop)
+       throw new Error('Deployment cancelled by user');
+     }
+     ```
+     Ini adalah pola desain *cancellation token* yang sangat efisien untuk proses latar belakang yang berjalan lama.

@@ -12,6 +12,7 @@ import { MongooseOrganizationsRepository, OrganizationsService, OrganizationsCon
 import { MongooseProjectsRepository, ProjectsService, ProjectsController, initProjectsRoutes } from './features/projects';
 import { MongooseSecretsRepository, SecretsService, SecretsController, initSecretsRoutes } from './features/secrets';
 import { MongooseApiKeysRepository, ApiKeysService, ApiKeysController, initApiKeysRoutes } from './features/api-keys';
+import { MongooseDeploymentsRepository, DeploymentsService, DeploymentsController, initDeploymentsRoutes } from './features/deployments';
 
 
 export function createApp(): express.Application {
@@ -78,12 +79,18 @@ export function createApp(): express.Application {
   const apiKeysController = new ApiKeysController(apiKeysService);
   const apiKeysRoutes = initApiKeysRoutes(apiKeysController);
 
+  const deploymentsRepo = new MongooseDeploymentsRepository();
+  const deploymentsService = new DeploymentsService(deploymentsRepo, projectsRepo);
+  const deploymentsController = new DeploymentsController(deploymentsService, projectsService);
+  const deploymentsRoutes = initDeploymentsRoutes(deploymentsController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
   app.use('/api/v1', projectsRoutes);
   app.use('/api/v1', secretsRoutes);
   app.use('/api/v1', apiKeysRoutes);
+  app.use('/api/v1', deploymentsRoutes);
 
 
   // Health check routes

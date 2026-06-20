@@ -5,7 +5,7 @@ import type { ProjectsRepository } from '../../projects/projects.repository';
 import type { OrganizationsRepository } from '../../organizations/organizations.repository';
 import { SecretsService } from '../../secrets/secrets.service';
 import type { SecretsRepository } from '../../secrets/secrets.repository';
-import { NotFoundError, ValidationError, ForbiddenError } from '../../../lib/errors';
+import { ValidationError, ForbiddenError } from '../../../lib/errors';
 
 // Mock helpers for Mongoose API key document
 function createMockApiKeyDoc(data: any) {
@@ -105,7 +105,12 @@ class InMemoryProjectsRepository implements ProjectsRepository {
   async createProjectMember(_data: any): Promise<any> { return null; }
   async findProjectMember(_projectId: string, _userId: string): Promise<any | null> { return null; }
   async listProjectMembers(_projectId: string): Promise<any[]> { return []; }
-  async removeProjectMember(_projectId: string, _userId: string): Promise<boolean> { return false; }
+  async removeProjectMember(_id: string): Promise<boolean> { return false; }
+  async findEnvironmentBySlug(_projectId: string, _slug: string): Promise<any | null> { return null; }
+  async addProjectMember(_data: any): Promise<any> { return null; }
+  async findProjectMemberById(_id: string): Promise<any | null> { return null; }
+  async updateProjectMemberRole(_id: string, _role: any): Promise<any | null> { return null; }
+  async countProjectMembers(_projectId: string): Promise<number> { return 0; }
 }
 
 class InMemoryOrganizationsRepository implements OrganizationsRepository {
@@ -127,6 +132,11 @@ class InMemoryOrganizationsRepository implements OrganizationsRepository {
   async listMemberships(_orgId: string): Promise<any[]> { return []; }
   async updateMembershipRole(_orgId: string, _userId: string, _role: string): Promise<any | null> { return null; }
   async removeMembership(_orgId: string, _userId: string): Promise<boolean> { return false; }
+  async findMembershipsByOrg(_orgId: string): Promise<any[]> { return []; }
+  async updateMembership(_id: string, _update: any): Promise<any | null> { return null; }
+  async deleteMembership(_id: string): Promise<boolean> { return false; }
+  async countOrgMembers(_orgId: string): Promise<number> { return 0; }
+  async findUserByEmail(_email: string): Promise<any | null> { return null; }
 }
 
 class InMemorySecretsRepository implements SecretsRepository {
@@ -183,6 +193,10 @@ class InMemorySecretsRepository implements SecretsRepository {
   async deleteSecretVersions(secretId: string): Promise<boolean> {
     this.versions = this.versions.filter(v => v.secretId !== secretId);
     return true;
+  }
+
+  async findSecretVersionById(id: string): Promise<any | null> {
+    return this.versions.find(v => v.id === id) || null;
   }
 }
 

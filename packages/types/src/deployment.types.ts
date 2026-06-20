@@ -1,8 +1,15 @@
-export type DeploymentStatus = 'queued' | 'building' | 'deploying' | 'success' | 'failed' | 'cancelled';
+export type DeploymentStatus =
+  | 'queued'
+  | 'building'
+  | 'deploying'
+  | 'success'
+  | 'failed'
+  | 'cancelled'
+  | 'pending_approval';
 
-export interface DeploymentLog {
+export interface StatusEvent {
+  status: DeploymentStatus;
   timestamp: string;
-  level: 'info' | 'warn' | 'error';
   message: string;
 }
 
@@ -11,13 +18,19 @@ export interface Deployment {
   projectId: string;
   environmentId: string;
   organizationId: string;
-  status: DeploymentStatus;
-  commitHash: string | null;
-  commitMessage: string | null;
+  version: string;
   branch: string | null;
-  triggeredBy: string; // userId or apiKeyId
+  commitSha: string | null;
+  commitMessage: string | null;
+  status: DeploymentStatus;
+  statusHistory: StatusEvent[];
+  triggeredBy: string;
+  triggeredVia: 'ui' | 'api' | 'webhook' | 'schedule';
+  buildLogs: string[];
   duration: number | null; // in milliseconds
-  logs: DeploymentLog[];
+  errorMessage: string | null;
+  metadata?: Record<string, any>;
   createdAt: string;
+  completedAt: string | null;
   updatedAt: string;
 }
