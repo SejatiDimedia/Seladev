@@ -9,6 +9,8 @@ import { config } from './config';
 // Features Imports
 import { MongooseAuthRepository, AuthService, AuthController, initAuthRoutes } from './features/auth';
 import { MongooseOrganizationsRepository, OrganizationsService, OrganizationsController, initOrganizationsRoutes } from './features/organizations';
+import { MongooseProjectsRepository, ProjectsService, ProjectsController, initProjectsRoutes } from './features/projects';
+
 
 export function createApp(): express.Application {
   const app = express();
@@ -59,9 +61,16 @@ export function createApp(): express.Application {
   const orgController = new OrganizationsController(orgService);
   const orgRoutes = initOrganizationsRoutes(orgController);
 
+  const projectsRepo = new MongooseProjectsRepository();
+  const projectsService = new ProjectsService(projectsRepo, orgRepo);
+  const projectsController = new ProjectsController(projectsService);
+  const projectsRoutes = initProjectsRoutes(projectsController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
+  app.use('/api/v1', projectsRoutes);
+
 
   // Health check routes
   app.get('/health', (_req, res) => {

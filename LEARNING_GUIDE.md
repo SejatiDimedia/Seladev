@@ -382,3 +382,47 @@ Ketika mengaktifkan MFA, server secara otomatis menghasilkan **8 buah backup rec
   ```
   Kita wajib mengecualikan seluruh rute autentikasi akun sendiri agar pengguna yang belum menyalakan MFA tetap bisa memanggil `/auth/mfa/setup` dan `/auth/mfa/activate` untuk mendaftarkan TOTP mereka. Jika tidak dikecualikan, pengguna akan terkunci selamanya (*deadlock*) karena tidak bisa mengakses halaman pendaftaran MFA akibat terblokir oleh aturan MFA itu sendiri.
 
+---
+
+## 10. Manajemen Proyek, Lingkungan (Environments), dan Keanggotaan Proyek
+
+Kami telah membangun fondasi utama untuk isolasi pengerjaan aplikasi dan konfigurasi menggunakan arsitektur berikut:
+
+### A. Pola Relasi Multi-Tenant Proyek & Organisasi
+Proyek adalah unit kerja utama di SELADEV. Setiap proyek terikat ke satu organisasi induk.
+* **Keunikan Slug Tingkat Org**: Slug proyek tidak unik secara global melainkan unik per organisasi. Dua organisasi berbeda dapat memiliki proyek dengan slug yang sama (misal `payment-gateway`).
+* Enkapsulasi data ini diamankan menggunakan **Compound Unique Index** pada MongoDB:
+  ```typescript
+  ProjectSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
+  ```
+  Hal ini mencegah tabrakan nama proyek di dalam organisasi yang sama namun tetap fleksibel di tingkat global.
+
+### B. Penyimpanan Konfigurasi Terbenam (Embedded Variables)
+Variabel lingkungan non-sensitif (seperti `API_URL` atau feature flags) disimpan dalam bentuk array terbenam (*embedded array*) secara langsung di dalam dokumen environment.
+* **Keuntungan**:
+  1. Mengurangi kebutuhan operasi `JOIN` (Lookup) saat runtime. Klien dapat menarik seluruh konfigurasi lingkungan dalam satu panggilan baca dokumen tunggal.
+  2. Memungkinkan pembaruan semua variabel secara atomik menggunakan instruksi pembaruan tunggal.
+* **Format Skema**:
+  ```typescript
+  variables: [{
+    key: string;
+    value: string;
+    isSecret: boolean; // Jika true, nilainya adalah kunci rujukan ke koleksi secrets
+  }]
+  ```
+
+### C. Proteksi Lingkungan & Otorisasi Bertingkat
+* **Auto-Provisioning**: Ketika sebuah proyek dibuat, sistem secara otomatis membangkitkan tiga default environment (`development`, `staging`, dan `production`). Lingkungan `production` diberi tanda `isProtected: true`.
+* **Aturan Proteksi**:
+  1. Lingkungan bertipe `production` tidak dapat dihapus oleh siapa pun.
+  2. Perubahan variabel lingkungan pada protected environment dibatasi secara ketat: hanya `project:admin` atau `org:admin/owner` yang diizinkan untuk menyimpannya. Pengembang biasa (`project:developer`) akan ditolak dengan respons `403 Forbidden` (`ForbiddenError`).
+
+### D. Pewarisan Peran (Role Inheritance) & Validasi Administrator Tunggal
+* **Resolusi Peran Efektif**:
+  Pola otorisasi yang kami gunakan menetapkan bahwa peran tingkat organisasi yang tinggi otomatis melimpahi proyek:
+  `Effective Role = max(Org Role, Project Role)`
+  Seorang Admin Organisasi (`org:admin`) tidak harus terdaftar sebagai anggota proyek untuk mengelolanya; middleware `authorizeRbac` mendeteksi ini dan meloloskan akses secara otomatis.
+* **Pencegahan Administratif Buntu (Sole Admin Safety)**:
+  Sistem melarang pencabutan peran `admin` proyek atau penghapusan pengguna dari proyek jika ia merupakan **satu-satunya administrator aktif** yang tersisa di proyek tersebut. Hal ini menghalangi terjadinya situasi di mana sebuah proyek tidak lagi memiliki pengelola administratif yang aktif.
+
+

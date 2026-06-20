@@ -83,7 +83,27 @@ Kami menambahkan lapisan pengamanan tambahan menggunakan **TOTP (RFC 6238)** dan
 - **Org-level MFA Enforcement**:
   - Jika suatu organisasi mengaktifkan pengaturan `settings.mfaRequired: true`, middleware `authenticateJwt` akan secara otomatis memblokir request pengguna yang belum mengaktifkan MFA dengan respon `403 Forbidden` (`MFA_REQUIRED`), kecuali untuk rute-rute autentikasi akun sendiri agar mereka tetap bisa melakukan setup MFA.
 
+### 5.2 Projects, Environments, dan Project Memberships (Phase 1.2)
+Kami merancang dan mengimplementasikan modul inti manajemen proyek dan isolasi konfigurasi sesuai dengan spesifikasi teknis:
+- **Project CRUD & Auto-provisioning**:
+  - `POST /api/v1/organizations/:orgIdOrSlug/projects`: Membuat proyek baru. Slugs proyek unik per organisasi (melalui compound unique index `{ organizationId: 1, slug: 1 }`).
+  - Secara otomatis memicu inisialisasi **3 default environments**: `development` (tidak proteksi), `staging` (tidak proteksi), dan `production` (`isProtected: true` secara bawaan).
+  - Mendaftarkan pembuat proyek sebagai administrator proyek (`admin` role) dalam tabel `projectMembers`.
+  - Memvalidasi pembatasan jumlah proyek maksimum berdasarkan konfigurasi limit organisasi (`settings.maxProjects`).
+- **Isolasi Environments & Variables**:
+  - Menyediakan endpoint pembuatan custom environment dengan inferensi otomatis tipe environment berdasarkan penamaan (`development` | `staging` | `production`).
+  - Menyimpan variabel konfigurasi non-sensitif secara terbenam (*embedded array*) di dalam dokumen environment untuk mempercepat pembacaan data konfigurasi dalam satu kueri tunggal (*avoiding additional database joins*).
+  - Melindungi data pada environment sensitif/protected: perubahan variabel di production memerlukan status kepemilikan administrator (`project:admin` atau `org:admin/owner`).
+  - Mencegah penghapusan environment bertipe `production` atau yang memiliki flag proteksi (`isProtected`).
+- **Manajemen Keanggotaan Proyek (Project Membership)**:
+  - Menyediakan workflow penambahan, pembaruan peran (*role*), dan penghapusan anggota dari proyek.
+  - Memvalidasi agar pengguna harus merupakan anggota aktif organisasi induk sebelum ditambahkan ke proyek.
+  - Melindungi integritas kepemimpinan proyek dengan melarang penggantian peran atau penghapusan administrator proyek tunggal (*sole project admin safety validation*).
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 13 skenario tes integrasi menyeluruh di `src/features/projects/__tests__/projects.test.ts` untuk memvalidasi limit proyek, tabrakan slug, inisialisasi default env, proteksi variabel, serta konsistensi administrator tunggal. Seluruh skenario tes berhasil lulus cleanly.
+
 ---
+
 
 ## 6. Resolusi Hambatan Kompilasi (Build Fixes)
 Kami menyelesaikan beberapa hambatan kompilasi TypeScript agar seluruh workspace monorepo terkompilasi bersih tanpa error:
