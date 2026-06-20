@@ -10,6 +10,7 @@ import {
 import type { DeploymentDocument } from '../../infrastructure/database/models/deployment.model';
 import type { DeploymentStatus, StatusEvent } from '@seladev/types';
 import type { DeploymentFilters } from './deployments.types';
+import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 function matchBranch(branch: string, pattern: string): boolean {
   // Simple glob pattern matcher (* matches everything, feature/* matches feature/anything)
@@ -21,7 +22,8 @@ function matchBranch(branch: string, pattern: string): boolean {
 export class DeploymentsService {
   constructor(
     private readonly deploymentsRepo: DeploymentsRepository,
-    private readonly projectsRepo: ProjectsRepository
+    private readonly projectsRepo: ProjectsRepository,
+    private readonly auditLogsService?: AuditLogsService
   ) {}
 
   private async verifyProjectAccess(user: { id: string; role: string; orgId: string }, projectId: string) {
@@ -40,7 +42,8 @@ export class DeploymentsService {
       branch?: string;
       commitHash?: string;
       commitMessage?: string;
-    }
+    },
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
     const project = await this.verifyProjectAccess(user, projectId);
 
@@ -116,13 +119,35 @@ export class DeploymentsService {
       );
     }
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: project.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'deployment.triggered',
+        resource: { type: 'deployment', id: deployment.id, name: deployment.version },
+        outcome: 'success',
+        metadata: {
+          environmentId: env.id,
+          branch,
+          commitSha: dto.commitHash || null,
+          requiresApproval,
+        },
+      });
+    }
+
     return deployment;
   }
 
   async approveDeployment(
     user: { id: string; role: string; orgId: string; projectRole?: string },
     projectId: string,
-    deploymentId: string
+    deploymentId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
     await this.verifyProjectAccess(user, projectId);
 
@@ -180,13 +205,33 @@ export class DeploymentsService {
       { jobId: updated.id }
     );
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: updated.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'deployment.approved',
+        resource: { type: 'deployment', id: updated.id, name: updated.version },
+        outcome: 'success',
+        metadata: {
+          environmentId: updated.environmentId.toString(),
+          branch: updated.branch,
+        },
+      });
+    }
+
     return updated;
   }
 
   async rejectDeployment(
     user: { id: string; role: string; orgId: string; projectRole?: string },
     projectId: string,
-    deploymentId: string
+    deploymentId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
     await this.verifyProjectAccess(user, projectId);
 
@@ -224,13 +269,33 @@ export class DeploymentsService {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: updated.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'deployment.rejected',
+        resource: { type: 'deployment', id: updated.id, name: updated.version },
+        outcome: 'success',
+        metadata: {
+          environmentId: updated.environmentId.toString(),
+          branch: updated.branch,
+        },
+      });
+    }
+
     return updated;
   }
 
   async cancelDeployment(
     user: { id: string; role: string; orgId: string; projectRole?: string },
     projectId: string,
-    deploymentId: string
+    deploymentId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
     await this.verifyProjectAccess(user, projectId);
 
@@ -261,6 +326,26 @@ export class DeploymentsService {
       timestamp: timestamp.toISOString(),
       message: 'Deployment cancelled by user',
     };
+
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: deployment.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'deployment.cancelled',
+        resource: { type: 'deployment', id: deployment.id, name: deployment.version },
+        outcome: 'success',
+        metadata: {
+          environmentId: deployment.environmentId.toString(),
+          branch: deployment.branch,
+          cancelledDuringState: deployment.status,
+        },
+      });
+    }
 
     if (deployment.status === 'queued' || deployment.status === 'pending_approval') {
       // 1. Remove from BullMQ if present in queue

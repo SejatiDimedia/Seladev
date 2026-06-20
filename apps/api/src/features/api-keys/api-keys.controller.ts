@@ -6,12 +6,19 @@ import { createApiKeySchema, updateApiKeySchema } from './api-keys.schema';
 export class ApiKeysController {
   constructor(private readonly apiKeysService: ApiKeysService) {}
 
+  private getClientContext(req: Request) {
+    return {
+      ipAddress: req.ip || null,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    };
+  }
+
   createKey = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const orgIdOrSlug = req.params.orgIdOrSlug!;
     const dto = createApiKeySchema.parse(req.body);
     const user = (req as any).user;
 
-    const { apiKey, plainTextKey } = await this.apiKeysService.createKey(user, orgIdOrSlug, dto);
+    const { apiKey, plainTextKey } = await this.apiKeysService.createKey(user, orgIdOrSlug, dto, this.getClientContext(req));
 
     res.status(201).json({
       success: true,
@@ -48,7 +55,7 @@ export class ApiKeysController {
     const keyId = req.params.keyId!;
     const dto = updateApiKeySchema.parse(req.body);
     const user = (req as any).user;
-    const apiKey = await this.apiKeysService.updateKey(user, keyId, dto);
+    const apiKey = await this.apiKeysService.updateKey(user, keyId, dto, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -59,7 +66,7 @@ export class ApiKeysController {
   deleteKey = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const keyId = req.params.keyId!;
     const user = (req as any).user;
-    await this.apiKeysService.deleteKey(user, keyId);
+    await this.apiKeysService.deleteKey(user, keyId, this.getClientContext(req));
 
     res.status(204).end();
   });

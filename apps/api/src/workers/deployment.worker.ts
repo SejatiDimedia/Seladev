@@ -4,6 +4,46 @@ import { DeploymentModel } from '../infrastructure/database/models/deployment.mo
 import { getSocketServer } from '../config/socket';
 import { getRedisClient } from '../config/redis';
 import type { DeploymentStatus, StatusEvent } from '@seladev/types';
+import { MongooseAuditLogsRepository } from '../features/audit-logs/audit-logs.repository';
+import { MongooseOrganizationsRepository } from '../features/organizations/organizations.repository';
+import { AuditLogsService } from '../features/audit-logs/audit-logs.service';
+
+const auditLogsRepo = new MongooseAuditLogsRepository();
+const orgRepo = new MongooseOrganizationsRepository();
+const auditLogsService = new AuditLogsService(auditLogsRepo, orgRepo);
+
+async function recordDeploymentAudit(
+  deploymentId: string,
+  action: 'deployment.completed' | 'deployment.failed' | 'deployment.cancelled',
+  outcome: 'success' | 'failure',
+  metadata?: any
+) {
+  try {
+    const deployment = await DeploymentModel.findById(deploymentId).exec();
+    if (deployment) {
+      await auditLogsService.record({
+        organizationId: deployment.organizationId.toString(),
+        projectId: deployment.projectId.toString(),
+        actor: {
+          userId: deployment.triggeredBy ? deployment.triggeredBy.toString() : null,
+          ipAddress: null,
+          userAgent: 'deployment-worker',
+        },
+        action,
+        resource: { type: 'deployment', id: deployment.id, name: deployment.version },
+        outcome,
+        metadata: {
+          branch: deployment.branch,
+          ...metadata,
+        },
+      });
+    }
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('Failed to record deployment audit log in worker:', err);
+    }
+  }
+}
 
 function emitSocketEvent(orgId: string, eventName: string, payload: any) {
   try {
@@ -75,6 +115,7 @@ export async function processDeployment(job: Job): Promise<void> {
         const timestamp = new Date();
         await transitionStatus(deploymentId, 'cancelled', 'Deployment cancelled by user', timestamp);
         emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'cancelled' });
+        await recordDeploymentAudit(deploymentId, 'deployment.cancelled', 'success', { reason: 'User cancellation request' });
         return true;
       }
       return false;
@@ -134,6 +175,7 @@ export async function processDeployment(job: Job): Promise<void> {
         status: 'failed',
         error: 'Container health check timeout',
       });
+      await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: 'Container health check timeout', duration });
     } else {
       await transitionStatus(
         deploymentId,
@@ -143,6 +185,7 @@ export async function processDeployment(job: Job): Promise<void> {
         duration
       );
       emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'success' });
+      await recordDeploymentAudit(deploymentId, 'deployment.completed', 'success', { duration });
     }
   } catch (err: any) {
     console.error('Error during deployment simulation:', err);
@@ -160,6 +203,7 @@ export async function processDeployment(job: Job): Promise<void> {
       status: 'failed',
       error: err.message,
     });
+    await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: err.message, duration: Date.now() - startTimestamp });
   }
 }
 

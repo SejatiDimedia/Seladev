@@ -8,6 +8,7 @@ import {
 import { encryptGcm, decryptGcm } from '../../lib/crypto';
 import type { SecretDocument } from '../../infrastructure/database/models/secret.model';
 import type { SecretVersionDocument } from '../../infrastructure/database/models/secret-version.model';
+import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 export interface SecretsUser {
   id: string;
@@ -20,7 +21,8 @@ export interface SecretsUser {
 export class SecretsService {
   constructor(
     private readonly secretsRepo: SecretsRepository,
-    private readonly projectsRepo: ProjectsRepository
+    private readonly projectsRepo: ProjectsRepository,
+    private readonly auditLogsService?: AuditLogsService
   ) {}
 
   /**
@@ -103,7 +105,8 @@ export class SecretsService {
     environmentId: string,
     key: string,
     value: string,
-    expiresAt?: Date | null
+    expiresAt?: Date | null,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<SecretDocument> {
     // Enforce API key project & environment boundaries
     this.enforceApiKeyScoping(user, projectId, environmentId);
@@ -160,6 +163,26 @@ export class SecretsService {
       createdBy: user.id,
     });
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: orgId,
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'secret.created',
+        resource: { type: 'secret', id: secret.id, name: secret.key },
+        outcome: 'success',
+        metadata: {
+          environmentId,
+          expiresAt: expiresAt || null,
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      });
+    }
+
     return secret;
   }
 
@@ -200,7 +223,8 @@ export class SecretsService {
   async revealSecret(
     user: SecretsUser,
     projectId: string,
-    secretId: string
+    secretId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<{ secret: SecretDocument; plaintextValue: string }> {
     const secret = await this.secretsRepo.findSecretById(secretId);
     if (!secret || secret.projectId.toString() !== projectId) {
@@ -227,6 +251,25 @@ export class SecretsService {
     secret.lastAccessedAt = new Date();
     await secret.save();
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: secret.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'secret.revealed',
+        resource: { type: 'secret', id: secret.id, name: secret.key },
+        outcome: 'success',
+        metadata: {
+          environmentId: secret.environmentId.toString(),
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      });
+    }
+
     return { secret, plaintextValue };
   }
 
@@ -234,7 +277,8 @@ export class SecretsService {
     user: SecretsUser,
     projectId: string,
     secretId: string,
-    value: string
+    value: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<SecretDocument> {
     const secret = await this.secretsRepo.findSecretById(secretId);
     if (!secret || secret.projectId.toString() !== projectId) {
@@ -271,13 +315,34 @@ export class SecretsService {
       createdBy: user.id,
     });
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: secret.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'secret.updated',
+        resource: { type: 'secret', id: secret.id, name: secret.key },
+        outcome: 'success',
+        metadata: {
+          environmentId: secret.environmentId.toString(),
+          newVersion,
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      });
+    }
+
     return secret;
   }
 
   async deleteSecret(
     user: SecretsUser,
     projectId: string,
-    secretId: string
+    secretId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<void> {
     const secret = await this.secretsRepo.findSecretById(secretId);
     if (!secret || secret.projectId.toString() !== projectId) {
@@ -295,6 +360,25 @@ export class SecretsService {
 
     // Cascade delete versions
     await this.secretsRepo.deleteSecretVersions(secretId);
+
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: secret.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'secret.deleted',
+        resource: { type: 'secret', id: secret.id, name: secret.key },
+        outcome: 'success',
+        metadata: {
+          environmentId: secret.environmentId.toString(),
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      });
+    }
   }
 
   // Versioning & Rollback operations (Phase 2.3)
@@ -321,7 +405,8 @@ export class SecretsService {
     user: SecretsUser,
     projectId: string,
     secretId: string,
-    versionNumber: number
+    versionNumber: number,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<SecretDocument> {
     const secret = await this.secretsRepo.findSecretById(secretId);
     if (!secret || secret.projectId.toString() !== projectId) {
@@ -362,6 +447,27 @@ export class SecretsService {
       version: newVersion,
       createdBy: user.id,
     });
+
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: secret.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'secret.updated',
+        resource: { type: 'secret', id: secret.id, name: secret.key },
+        outcome: 'success',
+        metadata: {
+          environmentId: secret.environmentId.toString(),
+          rollbackToVersion: versionNumber,
+          newVersion,
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      });
+    }
 
     return secret;
   }

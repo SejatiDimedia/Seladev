@@ -20,6 +20,13 @@ export class SecretsController {
     };
   }
 
+  private getClientContext(req: Request) {
+    return {
+      ipAddress: req.ip || null,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    };
+  }
+
   createSecret = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const projectId = req.params.projectId!;
     const envId = req.params.envId!;
@@ -27,7 +34,7 @@ export class SecretsController {
     const expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt) : null;
 
     const user = await this.getUserWithProjRole(req, projectId);
-    const secret = await this.secretsService.createSecret(user, projectId, envId, key, value, expiresAt);
+    const secret = await this.secretsService.createSecret(user, projectId, envId, key, value, expiresAt, this.getClientContext(req));
 
     res.status(201).json({
       success: true,
@@ -80,7 +87,7 @@ export class SecretsController {
     const secretId = req.params.secretId!;
 
     const user = await this.getUserWithProjRole(req, projectId);
-    const { secret, plaintextValue } = await this.secretsService.revealSecret(user, projectId, secretId);
+    const { secret, plaintextValue } = await this.secretsService.revealSecret(user, projectId, secretId, this.getClientContext(req));
 
     const json = secret.toJSON();
     res.status(200).json({
@@ -98,7 +105,7 @@ export class SecretsController {
     const { value } = updateSecretSchema.parse(req.body);
 
     const user = await this.getUserWithProjRole(req, projectId);
-    const secret = await this.secretsService.updateSecret(user, projectId, secretId, value);
+    const secret = await this.secretsService.updateSecret(user, projectId, secretId, value, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -111,7 +118,7 @@ export class SecretsController {
     const secretId = req.params.secretId!;
 
     const user = await this.getUserWithProjRole(req, projectId);
-    await this.secretsService.deleteSecret(user, projectId, secretId);
+    await this.secretsService.deleteSecret(user, projectId, secretId, this.getClientContext(req));
 
     res.status(204).end();
   });
@@ -140,7 +147,7 @@ export class SecretsController {
     }
 
     const user = await this.getUserWithProjRole(req, projectId);
-    const secret = await this.secretsService.rollbackSecret(user, projectId, secretId, version);
+    const secret = await this.secretsService.rollbackSecret(user, projectId, secretId, version, this.getClientContext(req));
 
     res.status(200).json({
       success: true,

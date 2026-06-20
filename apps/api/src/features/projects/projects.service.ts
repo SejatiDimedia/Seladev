@@ -19,17 +19,20 @@ import type {
   AssignProjectMemberDto,
   UpdateProjectMemberRoleDto
 } from './projects.types';
+import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 export class ProjectsService {
   constructor(
     private readonly projectsRepo: ProjectsRepository,
-    private readonly orgRepo: OrganizationsRepository
+    private readonly orgRepo: OrganizationsRepository,
+    private readonly auditLogsService?: AuditLogsService
   ) {}
 
   async createProject(
     userId: string,
     orgIdOrSlug: string,
-    dto: CreateProjectDto
+    dto: CreateProjectDto,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<Project> {
     // 1. Resolve organization by ID or Slug
     let org = await this.orgRepo.findOrgById(orgIdOrSlug);
@@ -105,6 +108,22 @@ export class ProjectsService {
       assignedBy: userId,
     });
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: org.id,
+        projectId: projectDoc.id,
+        actor: {
+          userId,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'project.created',
+        resource: { type: 'project', id: projectDoc.id, name: projectDoc.name },
+        outcome: 'success',
+        metadata: { name: projectDoc.name, slug: projectDoc.slug, visibility: projectDoc.visibility },
+      });
+    }
+
     return projectDoc.toJSON() as unknown as Project;
   }
 
@@ -129,7 +148,12 @@ export class ProjectsService {
     return projects.map(p => p.toJSON() as unknown as Project);
   }
 
-  async updateProject(projectId: string, dto: UpdateProjectDto): Promise<Project> {
+  async updateProject(
+    projectId: string,
+    dto: UpdateProjectDto,
+    userId?: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<Project> {
     const projectDoc = await this.projectsRepo.findProjectById(projectId);
     if (!projectDoc) {
       throw new NotFoundError('Project', projectId);
@@ -156,10 +180,31 @@ export class ProjectsService {
     }
 
     await projectDoc.save();
+
+    if (this.auditLogsService && userId) {
+      this.auditLogsService.record({
+        organizationId: projectDoc.organizationId.toString(),
+        projectId: projectDoc.id,
+        actor: {
+          userId,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'project.updated',
+        resource: { type: 'project', id: projectDoc.id, name: projectDoc.name },
+        outcome: 'success',
+        metadata: { dto },
+      });
+    }
+
     return projectDoc.toJSON() as unknown as Project;
   }
 
-  async archiveProject(projectId: string): Promise<void> {
+  async archiveProject(
+    projectId: string,
+    userId?: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<void> {
     const projectDoc = await this.projectsRepo.findProjectById(projectId);
     if (!projectDoc) {
       throw new NotFoundError('Project', projectId);
@@ -167,6 +212,21 @@ export class ProjectsService {
 
     projectDoc.archivedAt = new Date();
     await projectDoc.save();
+
+    if (this.auditLogsService && userId) {
+      this.auditLogsService.record({
+        organizationId: projectDoc.organizationId.toString(),
+        projectId: projectDoc.id,
+        actor: {
+          userId,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'project.archived',
+        resource: { type: 'project', id: projectDoc.id, name: projectDoc.name },
+        outcome: 'success',
+      });
+    }
   }
 
   // Environments API
@@ -311,7 +371,8 @@ export class ProjectsService {
   async addMember(
     projectId: string,
     assignedBy: string,
-    dto: AssignProjectMemberDto
+    dto: AssignProjectMemberDto,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<ProjectMember> {
     const projectDoc = await this.projectsRepo.findProjectById(projectId);
     if (!projectDoc) {
@@ -337,6 +398,22 @@ export class ProjectsService {
       role: dto.role,
       assignedBy,
     });
+
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: projectDoc.organizationId.toString(),
+        projectId,
+        actor: {
+          userId: assignedBy,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'project.member_added',
+        resource: { type: 'member', id: dto.userId, name: `User ${dto.userId}` },
+        outcome: 'success',
+        metadata: { role: dto.role },
+      });
+    }
 
     return memberDoc.toJSON() as unknown as ProjectMember;
   }
@@ -366,7 +443,12 @@ export class ProjectsService {
     return memberDoc.toJSON() as unknown as ProjectMember;
   }
 
-  async removeMember(projectId: string, userId: string): Promise<void> {
+  async removeMember(
+    projectId: string,
+    userId: string,
+    removedBy?: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<void> {
     const memberDoc = await this.projectsRepo.findProjectMember(projectId, userId);
     if (!memberDoc) {
       throw new NotFoundError('Project Membership', `${projectId}/${userId}`);
@@ -382,5 +464,23 @@ export class ProjectsService {
     }
 
     await this.projectsRepo.removeProjectMember(memberDoc.id);
+
+    if (this.auditLogsService && removedBy) {
+      const projectDoc = await this.projectsRepo.findProjectById(projectId);
+      if (projectDoc) {
+        this.auditLogsService.record({
+          organizationId: projectDoc.organizationId.toString(),
+          projectId,
+          actor: {
+            userId: removedBy,
+            ipAddress: clientContext?.ipAddress || null,
+            userAgent: clientContext?.userAgent || null,
+          },
+          action: 'project.member_removed',
+          resource: { type: 'member', id: userId, name: `User ${userId}` },
+          outcome: 'success',
+        });
+      }
+    }
   }
 }

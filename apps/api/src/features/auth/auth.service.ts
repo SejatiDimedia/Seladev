@@ -6,9 +6,14 @@ import { signAccessToken, signMfaPendingToken, verifyMfaPendingToken } from '../
 import { ConflictError, UnauthorizedError, NotFoundError, ValidationError } from '../../lib/errors';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
+import type { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { RefreshTokenModel } from '../../infrastructure/database/models/refresh-token.model';
 
 export class AuthService {
-  constructor(private readonly authRepo: AuthRepository) {}
+  constructor(
+    private readonly authRepo: AuthRepository,
+    private readonly auditLogsService?: AuditLogsService
+  ) {}
 
   async register(dto: RegisterDto): Promise<User> {
     const existingUser = await this.authRepo.findUserByEmail(dto.email);
@@ -21,24 +26,59 @@ export class AuthService {
       firstName: dto.firstName,
       lastName: dto.lastName,
       email: dto.email,
-      password: dto.password, // This is required by Zod schema but we pass the hashed version to DB
+      password: dto.password,
       passwordHash,
     });
 
     return userDoc.toJSON() as unknown as User;
   }
 
-  async login(dto: LoginDto): Promise<
+  async login(
+    dto: LoginDto,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<
     | { requiresMfa: false; accessToken: string; refreshToken: string; user: User }
     | { requiresMfa: true; mfaToken: string; user: User }
   > {
     const userDoc = await this.authRepo.findUserByEmail(dto.email);
     if (!userDoc || !userDoc.isActive) {
+      if (this.auditLogsService) {
+        this.auditLogsService.record({
+          organizationId: '000000000000000000000000',
+          action: 'auth.login_failed',
+          actor: {
+            userId: null,
+            email: dto.email,
+            ipAddress: clientContext?.ipAddress || null,
+            userAgent: clientContext?.userAgent || null,
+          },
+          resource: { type: 'auth', id: 'system', name: 'login' },
+          outcome: 'failure',
+          metadata: { reason: 'User not found or inactive' },
+        });
+      }
       throw new UnauthorizedError('Invalid credentials', 'INVALID_CREDENTIALS');
     }
 
     const isPasswordValid = await comparePassword(dto.password, userDoc.passwordHash);
     if (!isPasswordValid) {
+      if (this.auditLogsService) {
+        const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
+        const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+        this.auditLogsService.record({
+          organizationId: orgId,
+          action: 'auth.login_failed',
+          actor: {
+            userId: userDoc.id,
+            email: userDoc.email,
+            ipAddress: clientContext?.ipAddress || null,
+            userAgent: clientContext?.userAgent || null,
+          },
+          resource: { type: 'auth', id: userDoc.id, name: userDoc.email },
+          outcome: 'failure',
+          metadata: { reason: 'Incorrect password' },
+        });
+      }
       throw new UnauthorizedError('Invalid credentials', 'INVALID_CREDENTIALS');
     }
 
@@ -73,17 +113,31 @@ export class AuthService {
     const refreshTokenHash = hashSha256(rawRefreshToken);
     const family = crypto.randomUUID();
 
-    // Expiry: 7 days as per FR-AUTH-06
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
     await this.authRepo.createRefreshToken({
       tokenHash: refreshTokenHash,
       userId: userDoc.id,
-      organizationId: orgId ? orgId : '000000000000000000000000', // Dummy ObjectId if no org
+      organizationId: orgId ? orgId : '000000000000000000000000',
       family,
       expiresAt,
     });
+
+    if (this.auditLogsService && orgId) {
+      this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.login',
+        actor: {
+          userId: userDoc.id,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: userDoc.id, name: userDoc.email },
+        outcome: 'success',
+      });
+    }
 
     return {
       requiresMfa: false,
@@ -101,14 +155,11 @@ export class AuthService {
       throw new UnauthorizedError('Invalid refresh token', 'TOKEN_INVALID');
     }
 
-    // Expiry check
     if (new Date() > tokenDoc.expiresAt) {
       throw new UnauthorizedError('Refresh token expired', 'REFRESH_TOKEN_EXPIRED');
     }
 
-    // Rotation reuse check (FR-AUTH-05)
     if (tokenDoc.isRevoked) {
-      // Token reuse attack detected! Revoke the whole family
       await this.authRepo.revokeRefreshTokenFamily(tokenDoc.family);
       throw new UnauthorizedError('Refresh token reuse detected. Revoking session.', 'REFRESH_TOKEN_REUSED');
     }
@@ -118,7 +169,6 @@ export class AuthService {
       throw new UnauthorizedError('User session invalid', 'TOKEN_INVALID');
     }
 
-    // Mark old token as revoked/replaced
     const rawNewToken = generateRandomToken();
     const newTokenHash = hashSha256(rawNewToken);
 
@@ -126,12 +176,10 @@ export class AuthService {
     tokenDoc.replacedByHash = newTokenHash;
     await tokenDoc.save();
 
-    // Check membership
     const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
     const orgId = membership ? membership.organizationId.toString() : '';
     const role = membership ? membership.role : 'none';
 
-    // Issue new access token & refresh token (same family)
     const accessToken = signAccessToken({
       sub: userDoc.id,
       email: userDoc.email,
@@ -157,16 +205,38 @@ export class AuthService {
     };
   }
 
-  async logout(refreshToken: string): Promise<void> {
+  async logout(
+    refreshToken: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<void> {
     const tokenHash = hashSha256(refreshToken);
     const tokenDoc = await this.authRepo.findRefreshTokenByHash(tokenHash);
-    if (!tokenDoc) return; // Silent return for idempotency
+    if (!tokenDoc) return;
 
-    // Revoke token family
     await this.authRepo.revokeRefreshTokenFamily(tokenDoc.family);
+
+    if (this.auditLogsService) {
+      const user = await this.authRepo.findUserById(tokenDoc.userId.toString());
+      this.auditLogsService.record({
+        organizationId: tokenDoc.organizationId.toString(),
+        action: 'auth.logout',
+        actor: {
+          userId: tokenDoc.userId.toString(),
+          email: user ? user.email : 'unknown-user',
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: tokenDoc.userId.toString(), name: user ? user.email : 'logout' },
+        outcome: 'success',
+      });
+    }
   }
 
-  async changePassword(userId: string, dto: PasswordChangeDto): Promise<void> {
+  async changePassword(
+    userId: string,
+    dto: PasswordChangeDto,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<void> {
     const userDoc = await this.authRepo.findUserById(userId);
     if (!userDoc) {
       throw new NotFoundError('User', userId);
@@ -181,11 +251,31 @@ export class AuthService {
     userDoc.passwordHash = passwordHash;
     await userDoc.save();
 
-    // Revoke all refresh tokens for this user (FR-AUTH-10)
     await RefreshTokenModel.updateMany({ userId: userDoc._id }, { isRevoked: true }).exec();
+
+    if (this.auditLogsService) {
+      const membership = await this.authRepo.findFirstActiveMembership(userId);
+      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.password_changed',
+        actor: {
+          userId,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: userId, name: userDoc.email },
+        outcome: 'success',
+      });
+    }
   }
 
-  async verifyLoginMfa(mfaToken: string, token: string): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+  async verifyLoginMfa(
+    mfaToken: string,
+    token: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<{ accessToken: string; refreshToken: string; user: User }> {
     const decoded = verifyMfaPendingToken(mfaToken);
     const userDoc = await this.authRepo.findUserById(decoded.sub);
     if (!userDoc || !userDoc.isActive) {
@@ -200,10 +290,8 @@ export class AuthService {
     }
 
     if (!verified) {
-      // Check recovery codes
       for (const hashedCode of userDoc.mfaRecoveryCodes) {
         if (await comparePassword(token, hashedCode)) {
-          // Match found! Remove the used recovery code
           userDoc.mfaRecoveryCodes = userDoc.mfaRecoveryCodes.filter(c => c !== hashedCode);
           verified = true;
           break;
@@ -215,16 +303,13 @@ export class AuthService {
       throw new UnauthorizedError('Invalid MFA code or recovery code');
     }
 
-    // Update lastLoginAt
     userDoc.lastLoginAt = new Date();
     await userDoc.save();
 
-    // Check for active organization membership
     const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
     const orgId = membership ? membership.organizationId.toString() : '';
     const role = membership ? membership.role : 'none';
 
-    // Generate tokens
     const accessToken = signAccessToken({
       sub: userDoc.id,
       email: userDoc.email,
@@ -247,6 +332,22 @@ export class AuthService {
       expiresAt,
     });
 
+    if (this.auditLogsService && orgId) {
+      this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.login',
+        actor: {
+          userId: userDoc.id,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: userDoc.id, name: userDoc.email },
+        outcome: 'success',
+        metadata: { mfaUsed: true },
+      });
+    }
+
     return {
       accessToken,
       refreshToken: rawRefreshToken,
@@ -266,13 +367,17 @@ export class AuthService {
 
     const encryptedPayload = encryptGcm(secret);
     userDoc.mfaSecret = JSON.stringify(encryptedPayload);
-    userDoc.mfaEnabled = false; // Not enabled until activated
+    userDoc.mfaEnabled = false;
     await userDoc.save();
 
     return { secret, qrCodeUrl };
   }
 
-  async activateMfa(userId: string, token: string): Promise<{ recoveryCodes: string[] }> {
+  async activateMfa(
+    userId: string,
+    token: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<{ recoveryCodes: string[] }> {
     const userDoc = await this.authRepo.findUserById(userId);
     if (!userDoc) {
       throw new NotFoundError('User', userId);
@@ -290,7 +395,6 @@ export class AuthService {
       throw new UnauthorizedError('Invalid verification code');
     }
 
-    // Generate 8 backup recovery codes (each 10 hex characters)
     const rawRecoveryCodes = Array.from({ length: 8 }, () => generateRandomToken(5));
     const hashedRecoveryCodes = await Promise.all(
       rawRecoveryCodes.map(code => hashPassword(code))
@@ -300,10 +404,31 @@ export class AuthService {
     userDoc.mfaRecoveryCodes = hashedRecoveryCodes;
     await userDoc.save();
 
+    if (this.auditLogsService) {
+      const membership = await this.authRepo.findFirstActiveMembership(userId);
+      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.mfa.enabled',
+        actor: {
+          userId,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: userId, name: userDoc.email },
+        outcome: 'success',
+      });
+    }
+
     return { recoveryCodes: rawRecoveryCodes };
   }
 
-  async disableMfa(userId: string, token: string): Promise<void> {
+  async disableMfa(
+    userId: string,
+    token: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<void> {
     const userDoc = await this.authRepo.findUserById(userId);
     if (!userDoc) {
       throw new NotFoundError('User', userId);
@@ -321,7 +446,6 @@ export class AuthService {
     }
 
     if (!verified) {
-      // Check recovery codes
       for (const hashedCode of userDoc.mfaRecoveryCodes) {
         if (await comparePassword(token, hashedCode)) {
           verified = true;
@@ -338,10 +462,22 @@ export class AuthService {
     userDoc.mfaSecret = null;
     userDoc.mfaRecoveryCodes = [];
     await userDoc.save();
+
+    if (this.auditLogsService) {
+      const membership = await this.authRepo.findFirstActiveMembership(userId);
+      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.mfa.disabled',
+        actor: {
+          userId,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'auth', id: userId, name: userDoc.email },
+        outcome: 'success',
+      });
+    }
   }
 }
-
-// We import RefreshTokenModel to allow direct update in changePassword, but wait:
-// Let's use the DB models directly or add a method in repository to maintain decoupling.
-// Let's import RefreshTokenModel.
-import { RefreshTokenModel } from '../../infrastructure/database/models/refresh-token.model';

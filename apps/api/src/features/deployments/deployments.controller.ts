@@ -21,6 +21,13 @@ export class DeploymentsController {
     };
   }
 
+  private getClientContext(req: Request) {
+    return {
+      ipAddress: req.ip || null,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    };
+  }
+
   triggerDeployment = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const projectId = req.params.projectId!;
     const parsed = triggerDeploymentSchema.parse(req.body);
@@ -39,7 +46,7 @@ export class DeploymentsController {
     if (parsed.commitHash !== undefined) dto.commitHash = parsed.commitHash;
     if (parsed.commitMessage !== undefined) dto.commitMessage = parsed.commitMessage;
 
-    const deployment = await this.deploymentsService.triggerDeployment(user, projectId, dto);
+    const deployment = await this.deploymentsService.triggerDeployment(user, projectId, dto, this.getClientContext(req));
 
     res.status(201).json({
       success: true,
@@ -98,7 +105,7 @@ export class DeploymentsController {
     const deploymentId = req.params.deploymentId!;
     const user = await this.getUserWithProjRole(req, projectId);
 
-    const deployment = await this.deploymentsService.cancelDeployment(user, projectId, deploymentId);
+    const deployment = await this.deploymentsService.cancelDeployment(user, projectId, deploymentId, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -111,7 +118,7 @@ export class DeploymentsController {
     const deploymentId = req.params.deploymentId!;
     const user = await this.getUserWithProjRole(req, projectId);
 
-    const deployment = await this.deploymentsService.approveDeployment(user, projectId, deploymentId);
+    const deployment = await this.deploymentsService.approveDeployment(user, projectId, deploymentId, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -124,7 +131,7 @@ export class DeploymentsController {
     const deploymentId = req.params.deploymentId!;
     const user = await this.getUserWithProjRole(req, projectId);
 
-    const deployment = await this.deploymentsService.rejectDeployment(user, projectId, deploymentId);
+    const deployment = await this.deploymentsService.rejectDeployment(user, projectId, deploymentId, this.getClientContext(req));
 
     res.status(200).json({
       success: true,

@@ -1,17 +1,20 @@
-import type { OrgRole } from './rbac.types';
-
 export interface AuditLog {
   id: string;
   organizationId: string;
   projectId: string | null;
-  actorId: string; // userId or apiKeyId
-  actorEmail: string;
-  actorRole: OrgRole | 'system' | string;
+  actor: {
+    userId: string | null; // null for system/API key events
+    email: string;
+    ipAddress: string | null;
+    userAgent: string | null;
+  };
   action: string;
-  resourceType: string;
-  resourceId: string;
+  resource: {
+    type: string; // 'secret' | 'project' | 'deployment' | 'auth' | 'org' | 'member' | 'apiKey'
+    id: string;
+    name: string; // Denormalized name
+  };
   metadata: Record<string, unknown> | null;
-  ipAddress: string | null;
-  userAgent: string | null;
+  outcome: 'success' | 'failure';
   createdAt: string;
 }

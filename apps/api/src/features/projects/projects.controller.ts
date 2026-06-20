@@ -16,12 +16,19 @@ import {
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
 
+  private getClientContext(req: Request) {
+    return {
+      ipAddress: req.ip || null,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    };
+  }
+
   createProject = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const orgIdOrSlug = req.params.orgIdOrSlug!;
     const dto = createProjectSchema.parse(req.body);
     const userId = (req as any).user.id;
 
-    const project = await this.projectsService.createProject(userId, orgIdOrSlug, dto);
+    const project = await this.projectsService.createProject(userId, orgIdOrSlug, dto, this.getClientContext(req));
 
     res.status(201).json({
       success: true,
@@ -52,7 +59,8 @@ export class ProjectsController {
   updateProject = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const projectId = req.params.projectId!;
     const dto = updateProjectSchema.parse(req.body);
-    const project = await this.projectsService.updateProject(projectId, dto);
+    const userId = (req as any).user.id;
+    const project = await this.projectsService.updateProject(projectId, dto, userId, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -62,7 +70,8 @@ export class ProjectsController {
 
   archiveProject = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const projectId = req.params.projectId!;
-    await this.projectsService.archiveProject(projectId);
+    const userId = (req as any).user.id;
+    await this.projectsService.archiveProject(projectId, userId, this.getClientContext(req));
 
     res.status(204).end();
   });
@@ -168,7 +177,7 @@ export class ProjectsController {
     const projectId = req.params.projectId!;
     const dto = assignProjectMemberSchema.parse(req.body);
     const assignedBy = (req as any).user.id;
-    const member = await this.projectsService.addMember(projectId, assignedBy, dto);
+    const member = await this.projectsService.addMember(projectId, assignedBy, dto, this.getClientContext(req));
 
     res.status(201).json({
       success: true,
@@ -191,7 +200,8 @@ export class ProjectsController {
   removeMember = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const projectId = req.params.projectId!;
     const userId = req.params.userId!;
-    await this.projectsService.removeMember(projectId, userId);
+    const removedBy = (req as any).user.id;
+    await this.projectsService.removeMember(projectId, userId, removedBy, this.getClientContext(req));
 
     res.status(204).end();
   });

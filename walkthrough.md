@@ -173,6 +173,34 @@ Kami merancang dan mengimplementasikan modul Deployment terintegrasi untuk menan
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 11 skenario tes integrasi komprehensif di `src/features/deployments/__tests__/deployments.test.ts` untuk memverifikasi fungsionalitas antrean BullMQ, pembatalan, validasi cabang (*branch validation*), persetujuan manual pada protected environment, dan pagination kursor. Seluruh tes berhasil lulus dengan bersih.
 
+### 5.6 Audit Logs Module & Immutability Trail (Phase 3.7)
+Kami merancang dan mengimplementasikan modul **Audit Logs** untuk mencatat setiap aktivitas sensitif atau perubahan konfigurasi di seluruh sistem secara andal (SOC2-compliant audit trail):
+- **Model & Skema Mongoose (`audit-log.model.ts`)**:
+  - Menyimpan metadata log audit yang terperinci: `organizationId`, `projectId` (opsional), `actor` (userId, email, ipAddress, userAgent), `action`, `resource` (type, id, name), `metadata` (konteks tambahan seperti perubahan nilai), `outcome` (`success` | `failure`), dan `createdAt`.
+  - Dikonfigurasi dengan Write Concern `{ writeConcern: { w: 'majority', j: true } }` untuk menjamin ketahanan database yang tinggi.
+  - Memiliki compound index untuk mempercepat pencarian filter historis:
+    - `{ organizationId: 1, createdAt: -1 }` (default historical listing)
+    - `{ organizationId: 1, action: 1, createdAt: -1 }` (action filter)
+    - `{ organizationId: 1, 'actor.userId': 1, createdAt: -1 }` (actor filter)
+    - `{ organizationId: 1, 'resource.id': 1, createdAt: -1 }` (resource filter)
+- **Desain Repositori Imutabel (Immutability Enforcement)**:
+  - Repositori log audit `AuditLogRepository` hanya mengekspos metode `create` dan `findMany`. Tidak ada fungsi `update`, `delete`, atau `clear` untuk menjamin sifat data log yang kekal (*immutable*), mencegah manipulasi data oleh pihak internal.
+- **Pencatatan Asinkron Fire-and-Forget**:
+  - Operasi pencatatan log audit via `AuditLogsService.record()` dijalankan secara asinkron non-blocking. Jika terjadi kegagalan penulisan log, error ditangkap secara internal (di-log ke konsol) dan tidak akan mengganggu atau memperlambat transaksi utama pengguna (*zero latency degradation*).
+  - Jika detail email tidak diteruskan, service secara asinkron me-resolve email aktor berdasarkan `actor.userId` di latar belakang.
+- **Integrasi Menyeluruh di Seluruh Call Sites**:
+  - Diintegrasikan di seluruh titik perubahan data (mutasi):
+    - **Authentication**: `auth.login`, `auth.login_failed`, `auth.logout`, `auth.password_changed`, `auth.mfa.enabled`, `auth.mfa.disabled`.
+    - **Projects**: `project.created`, `project.updated`, `project.archived`, `project.member_added`, `project.member_removed`.
+    - **Secrets**: `secret.created`, `secret.updated`, `secret.deleted`, `secret.revealed` (ketika user melihat isi plaintext secret, bukan ketika list metadata).
+    - **API Keys**: `apiKey.created`, `apiKey.revoked`.
+    - **Deployments & Workers**: `deployment.triggered`, `deployment.approved`, `deployment.rejected`, `deployment.cancelled`, `deployment.completed`, `deployment.failed` (baik melalui API controller maupun di dalam BullMQ worker).
+- **Pembatasan Peran & Isolasi Multi-tenant**:
+  - Hanya pengguna dengan peran `owner` atau `admin` pada organisasi induk yang dapat memanggil API log audit (`GET /api/v1/organizations/:orgIdOrSlug/audit-logs`). Anggota biasa (`member`/`viewer`) akan menerima respon `403 Forbidden`.
+  - Otorisasi diverifikasi secara ketat berdasarkan `organizationId` pengguna untuk memastikan isolasi tenant.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 7 skenario tes integrasi komprehensif di `src/features/audit-logs/__tests__/audit-logs.test.ts` untuk memverifikasi fungsionalitas pencatatan log audit asinkron, proteksi peran (RBAC), pembatasan multi-tenant, pencarian filter, dan cursor pagination base64. Seluruh tes berhasil lulus 100% (total **67 passed tests** di seluruh monorepo).
+
 ---
 
 ## Langkah Menjalankan Secara Lokal

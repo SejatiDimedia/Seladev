@@ -11,10 +11,10 @@ export class AuthController {
   private setRefreshTokenCookie(res: Response, token: string): void {
     res.cookie('refreshToken', token, {
       httpOnly: true,
-      secure: config.server.isProduction, // True in production, false in development
+      secure: config.server.isProduction,
       sameSite: 'strict',
       maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-      path: '/api/v1/auth', // Scoped to auth routes to prevent leakage
+      path: '/api/v1/auth',
     });
   }
 
@@ -25,6 +25,13 @@ export class AuthController {
       sameSite: 'strict',
       path: '/api/v1/auth',
     });
+  }
+
+  private getClientContext(req: Request) {
+    return {
+      ipAddress: req.ip || null,
+      userAgent: (req.headers['user-agent'] as string) || null,
+    };
   }
 
   register = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
@@ -38,7 +45,7 @@ export class AuthController {
 
   login = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const dto = loginSchema.parse(req.body);
-    const result = await this.authService.login(dto);
+    const result = await this.authService.login(dto, this.getClientContext(req));
 
     if (result.requiresMfa) {
       res.status(200).json({
@@ -65,7 +72,6 @@ export class AuthController {
   });
 
   refresh = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
-    // Read from cookie first, fallback to body
     const token = req.cookies?.refreshToken || req.body.refreshToken;
     if (!token) {
       throw new UnauthorizedError('Refresh token required', 'AUTH_REQUIRED');
@@ -87,7 +93,7 @@ export class AuthController {
   logout = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const token = req.cookies?.refreshToken || req.body.refreshToken;
     if (token) {
-      await this.authService.logout(token);
+      await this.authService.logout(token, this.getClientContext(req));
     }
 
     this.clearRefreshTokenCookie(res);
@@ -99,9 +105,8 @@ export class AuthController {
     const dto = passwordChangeSchema.parse(req.body);
     const userId = (req as any).user.id;
 
-    await this.authService.changePassword(userId, dto);
+    await this.authService.changePassword(userId, dto, this.getClientContext(req));
 
-    // After password change, logout of all other devices, and clear current session cookie
     this.clearRefreshTokenCookie(res);
 
     res.status(200).json({
@@ -114,7 +119,8 @@ export class AuthController {
     const dto = loginMfaSchema.parse(req.body);
     const { accessToken, refreshToken, user } = await this.authService.verifyLoginMfa(
       dto.mfaToken,
-      dto.token
+      dto.token,
+      this.getClientContext(req)
     );
 
     this.setRefreshTokenCookie(res, refreshToken);
@@ -144,7 +150,7 @@ export class AuthController {
   activateMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const dto = verifyMfaSchema.parse(req.body);
     const userId = (req as any).user.id;
-    const { recoveryCodes } = await this.authService.activateMfa(userId, dto.token);
+    const { recoveryCodes } = await this.authService.activateMfa(userId, dto.token, this.getClientContext(req));
 
     res.status(200).json({
       success: true,
@@ -157,7 +163,7 @@ export class AuthController {
   disableMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const dto = verifyMfaSchema.parse(req.body);
     const userId = (req as any).user.id;
-    await this.authService.disableMfa(userId, dto.token);
+    await this.authService.disableMfa(userId, dto.token, this.getClientContext(req));
 
     res.status(200).json({
       success: true,

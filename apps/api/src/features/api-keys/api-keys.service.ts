@@ -8,6 +8,7 @@ import {
   ForbiddenError 
 } from '../../lib/errors';
 import type { ApiKeyDocument } from '../../infrastructure/database/models/api-key.model';
+import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 
@@ -41,7 +42,8 @@ export class ApiKeysService {
   constructor(
     private readonly apiKeysRepo: ApiKeysRepository,
     private readonly projectsRepo: ProjectsRepository,
-    private readonly orgRepo: OrganizationsRepository
+    private readonly orgRepo: OrganizationsRepository,
+    private readonly auditLogsService?: AuditLogsService
   ) {}
 
   /**
@@ -67,7 +69,8 @@ export class ApiKeysService {
       expiresInDays?: number | null | undefined;
       projectId?: string | null | undefined;
       environmentId?: string | null | undefined;
-    }
+    },
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<{ apiKey: ApiKeyDocument; plainTextKey: string }> {
     // 1. Resolve organization by ID or Slug
     let org = await this.orgRepo.findOrgById(orgIdOrSlug);
@@ -127,6 +130,26 @@ export class ApiKeysService {
       expiresAt,
     });
 
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: org.id,
+        projectId: dto.projectId || null,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'apiKey.created',
+        resource: { type: 'apiKey', id: apiKey.id, name: apiKey.name },
+        outcome: 'success',
+        metadata: {
+          scopes: apiKey.scopes,
+          prefix: apiKey.keyPrefix,
+          expiresAt: apiKey.expiresAt || null,
+        },
+      });
+    }
+
     return { apiKey, plainTextKey };
   }
 
@@ -171,7 +194,8 @@ export class ApiKeysService {
   async updateKey(
     user: { id: string; role: string; orgId: string },
     keyId: string,
-    dto: { isActive: boolean }
+    dto: { isActive: boolean },
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<ApiKeyDocument> {
     this.checkOrgAdmin(user);
     const key = await this.apiKeysRepo.findKeyById(keyId);
@@ -183,14 +207,34 @@ export class ApiKeysService {
       throw new ForbiddenError('Access denied: organization mismatch');
     }
 
+    const wasActive = key.isActive;
     key.isActive = dto.isActive;
     await key.save();
+
+    if (this.auditLogsService) {
+      const action = !dto.isActive && wasActive ? 'apiKey.revoked' : 'apiKey.updated';
+      this.auditLogsService.record({
+        organizationId: key.organizationId.toString(),
+        projectId: key.projectId ? key.projectId.toString() : null,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action,
+        resource: { type: 'apiKey', id: key.id, name: key.name },
+        outcome: 'success',
+        metadata: { isActive: key.isActive },
+      });
+    }
+
     return key;
   }
 
   async deleteKey(
     user: { id: string; role: string; orgId: string },
-    keyId: string
+    keyId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<void> {
     this.checkOrgAdmin(user);
     const key = await this.apiKeysRepo.findKeyById(keyId);
@@ -205,5 +249,21 @@ export class ApiKeysService {
     // Revoke key (sets isActive: false) as per spec
     key.isActive = false;
     await key.save();
+
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: key.organizationId.toString(),
+        projectId: key.projectId ? key.projectId.toString() : null,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'apiKey.revoked',
+        resource: { type: 'apiKey', id: key.id, name: key.name },
+        outcome: 'success',
+        metadata: { revokedByDelete: true },
+      });
+    }
   }
 }
