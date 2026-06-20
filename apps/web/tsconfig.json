@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@seladev/types": ["../../packages/types/src/index.ts"],
+      "@seladev/validators": ["../../packages/validators/src/index.ts"],
+      "@seladev/utils": ["../../packages/utils/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*"]
+}
