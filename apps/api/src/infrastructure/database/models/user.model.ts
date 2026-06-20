@@ -4,6 +4,7 @@ import type { User } from '@seladev/types';
 export interface UserDocument extends Omit<User, 'id' | 'lastLoginAt' | 'createdAt' | 'updatedAt'>, Document {
   passwordHash: string;
   mfaSecret: string | null;
+  mfaRecoveryCodes: string[];
   lastLoginAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -54,6 +55,10 @@ const UserSchema = new Schema<UserDocument>(
       type: String,
       default: null,
     },
+    mfaRecoveryCodes: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true,
@@ -65,6 +70,7 @@ const UserSchema = new Schema<UserDocument>(
         delete obj.__v;
         delete obj.passwordHash;
         delete obj.mfaSecret;
+        delete obj.mfaRecoveryCodes;
         return obj;
       },
     },

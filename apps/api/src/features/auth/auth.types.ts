@@ -5,6 +5,8 @@ export type {
 export type { 
   RegisterDto, 
   LoginDto, 
-  PasswordChangeDto 
+  PasswordChangeDto,
+  VerifyMfaDto,
+  LoginMfaDto
 } from '@seladev/validators';
 export type { JwtPayload } from '../../lib/jwt';

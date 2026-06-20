@@ -71,6 +71,18 @@ Kami telah menerapkan infrastruktur keamanan tingkat lanjut untuk identitas peng
   - `authenticate-jwt.ts`: Memvalidasi JWT di header Authorization dan memeriksa daftar cekkal (*blocklist*) sesi aktif di Redis.
   - `authorize-rbac.ts`: Middleware dinamis untuk memvalidasi tingkatan akses pengguna pada dua tingkat (organisasi dan proyek).
 
+### 5.1 Multi-Factor Authentication (MFA / TOTP)
+Kami menambahkan lapisan pengamanan tambahan menggunakan **TOTP (RFC 6238)** dan backup recovery codes:
+- **AES-256-GCM Encryption**: Rahasia TOTP (*TOTP secret*) disimpan dalam kondisi terenkripsi di database menggunakan algoritma AES-256-GCM. Kunci enkripsi diturunkan secara deterministik dari master key dan organizationId (atau platform default key jika user belum terasosiasi organisasi).
+- **Setup & Aktivasi**:
+  - `POST /auth/mfa/setup`: Membuat TOTP secret baru, memformat URI `otpauth://`, dan menghasilkan QR Code dalam format Data URL (base64) untuk ditampilkan di frontend.
+  - `POST /auth/mfa/activate`: Memverifikasi kode OTP pertama dari pengguna. Jika valid, sistem akan menghasilkan **8 buah backup recovery codes** (masing-masing 10 karakter heksadesimal) yang di-hash menggunakan bcrypt untuk disimpan di DB dan hanya ditampilkan satu kali ke pengguna.
+- **Login Flow Integration**:
+  - `POST /auth/login` dimodifikasi: jika pengguna mengaktifkan MFA, server tidak langsung mengembalikan token akses melainkan mengembalikan response `{ requiresMfa: true, mfaToken }` dengan token sementara berumur 3 menit (`mfa_pending`).
+  - `POST /auth/login/mfa`: Endpoint khusus untuk memverifikasi kode OTP (atau backup recovery code) bersama dengan token sementara untuk menyelesaikan proses masuk.
+- **Org-level MFA Enforcement**:
+  - Jika suatu organisasi mengaktifkan pengaturan `settings.mfaRequired: true`, middleware `authenticateJwt` akan secara otomatis memblokir request pengguna yang belum mengaktifkan MFA dengan respon `403 Forbidden` (`MFA_REQUIRED`), kecuali untuk rute-rute autentikasi akun sendiri agar mereka tetap bisa melakukan setup MFA.
+
 ---
 
 ## 6. Resolusi Hambatan Kompilasi (Build Fixes)

@@ -35,6 +35,11 @@ export interface JwtPayload {
   jti: string;         // JWT ID for blocklisting
 }
 
+export interface MfaPendingPayload {
+  sub: string;         // userId
+  type: 'mfa_pending'; // token type
+}
+
 /**
  * Signs an RS256 JWT using the private RSA key.
  */
@@ -61,3 +66,36 @@ export function verifyAccessToken(token: string): JwtPayload {
     issuer: 'seladev',
   }) as JwtPayload;
 }
+
+/**
+ * Signs a short-lived (3-minute) temporary MFA pending token.
+ */
+export function signMfaPendingToken(userId: string): string {
+  const payload: MfaPendingPayload = {
+    sub: userId,
+    type: 'mfa_pending',
+  };
+
+  return jwt.sign(payload, privateKey, {
+    algorithm: 'RS256',
+    expiresIn: '3m',
+    issuer: 'seladev',
+  });
+}
+
+/**
+ * Verifies a temporary MFA pending token.
+ */
+export function verifyMfaPendingToken(token: string): MfaPendingPayload {
+  const decoded = jwt.verify(token, publicKey, {
+    algorithms: ['RS256'],
+    issuer: 'seladev',
+  }) as MfaPendingPayload;
+
+  if (decoded.type !== 'mfa_pending') {
+    throw new Error('Invalid token type');
+  }
+
+  return decoded;
+}
+

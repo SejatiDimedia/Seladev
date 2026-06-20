@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { asyncWrapper } from '../../lib/async-wrapper';
 import type { AuthService } from './auth.service';
-import { registerSchema, loginSchema, passwordChangeSchema } from './auth.schema';
+import { registerSchema, loginSchema, passwordChangeSchema, verifyMfaSchema, loginMfaSchema } from './auth.schema';
 import { config } from '../../config';
 import { UnauthorizedError } from '../../lib/errors';
 
@@ -38,15 +38,28 @@ export class AuthController {
 
   login = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
     const dto = loginSchema.parse(req.body);
-    const { accessToken, refreshToken, user } = await this.authService.login(dto);
+    const result = await this.authService.login(dto);
 
-    this.setRefreshTokenCookie(res, refreshToken);
+    if (result.requiresMfa) {
+      res.status(200).json({
+        success: true,
+        data: {
+          requiresMfa: true,
+          mfaToken: result.mfaToken,
+          user: result.user,
+        },
+      });
+      return;
+    }
+
+    this.setRefreshTokenCookie(res, result.refreshToken);
 
     res.status(200).json({
       success: true,
       data: {
-        accessToken,
-        user,
+        requiresMfa: false,
+        accessToken: result.accessToken,
+        user: result.user,
       },
     });
   });
@@ -94,6 +107,61 @@ export class AuthController {
     res.status(200).json({
       success: true,
       message: 'Password changed successfully. Active sessions revoked.',
+    });
+  });
+
+  verifyLoginMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const dto = loginMfaSchema.parse(req.body);
+    const { accessToken, refreshToken, user } = await this.authService.verifyLoginMfa(
+      dto.mfaToken,
+      dto.token
+    );
+
+    this.setRefreshTokenCookie(res, refreshToken);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        accessToken,
+        user,
+      },
+    });
+  });
+
+  setupMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const userId = (req as any).user.id;
+    const { secret, qrCodeUrl } = await this.authService.setupMfa(userId);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        secret,
+        qrCodeUrl,
+      },
+    });
+  });
+
+  activateMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const dto = verifyMfaSchema.parse(req.body);
+    const userId = (req as any).user.id;
+    const { recoveryCodes } = await this.authService.activateMfa(userId, dto.token);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        recoveryCodes,
+      },
+    });
+  });
+
+  disableMfa = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const dto = verifyMfaSchema.parse(req.body);
+    const userId = (req as any).user.id;
+    await this.authService.disableMfa(userId, dto.token);
+
+    res.status(200).json({
+      success: true,
+      message: 'MFA has been successfully disabled.',
     });
   });
 }

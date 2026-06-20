@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import mongoose from 'mongoose';
 import { verifyAccessToken } from '../lib/jwt';
-import { UnauthorizedError } from '../lib/errors';
+import { UnauthorizedError, ForbiddenError } from '../lib/errors';
 import { getRedisClient } from '../config/redis';
 
 export const authenticateJwt: RequestHandler = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
@@ -42,6 +43,27 @@ export const authenticateJwt: RequestHandler = async (req: Request, _res: Respon
       role: payload.role,
       jti: payload.jti,
     };
+
+    // Org-level MFA enforcement check
+    const isAuthRoute = req.originalUrl.includes('/api/v1/auth');
+    if (!isAuthRoute && payload.orgId) {
+      try {
+        const Organization = mongoose.model('Organization');
+        const org = await Organization.findById(payload.orgId).exec();
+        if (org && org.settings?.mfaRequired) {
+          const User = mongoose.model('User');
+          const dbUser = await User.findById(payload.sub).exec();
+          if (dbUser && !dbUser.mfaEnabled) {
+            const forbiddenError = new ForbiddenError('MFA setup is required by this organization');
+            (forbiddenError as any).code = 'MFA_REQUIRED';
+            next(forbiddenError);
+            return;
+          }
+        }
+      } catch (dbError) {
+        console.error('⚠️ MFA enforcement check failed:', dbError);
+      }
+    }
 
     next();
   } catch (error: any) {

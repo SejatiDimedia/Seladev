@@ -26,3 +26,15 @@ export const passwordChangeSchema = z.object({
 export type RegisterDto = z.infer<typeof registerSchema>;
 export type LoginDto = z.infer<typeof loginSchema>;
 export type PasswordChangeDto = z.infer<typeof passwordChangeSchema>;
+
+export const verifyMfaSchema = z.object({
+  token: z.string().min(6, 'Verification code must be at least 6 characters').trim(),
+});
+export type VerifyMfaDto = z.infer<typeof verifyMfaSchema>;
+
+export const loginMfaSchema = z.object({
+  mfaToken: z.string().min(1, 'MFA pending token is required'),
+  token: z.string().min(6, 'Verification code must be at least 6 characters').trim(),
+});
+export type LoginMfaDto = z.infer<typeof loginMfaSchema>;
+

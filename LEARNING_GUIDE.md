@@ -331,3 +331,54 @@ Dalam arsitektur monorepo, aplikasi seperti `apps/api` menggunakan `"rootDir": "
   }
   ```
   Hal ini memberikan validasi tipe yang akurat di backend server saat berinteraksi dengan database Mongoose secara langsung.
+
+---
+
+## 9. Keamanan MFA / TOTP & Enkripsi AES-256-GCM
+
+Kita menerapkan standar keamanan kelas industri untuk melindungi rahasia TOTP pengguna dengan pola-pola arsitektur berikut:
+
+### A. Enkripsi Rahasia TOTP dengan AES-256-GCM
+Berbeda dengan hashing password (seperti bcrypt yang searah), rahasia TOTP harus dapat didekripsi kembali oleh server untuk memvalidasi token 6-digit yang dikirim pengguna. Oleh karena itu, kita menggunakan **enkripsi asimetris/simetris dua arah**.
+* **AES-256-GCM (Galois/Counter Mode)**: Dipilih karena merupakan algoritma enkripsi terotentikasi (*Authenticated Encryption*). Selain mengamankan data, ia menghasilkan `authTag` untuk mendeteksi apabila ada modifikasi/tampering ilegal pada data terenkripsi.
+* **Format Payload di Database**:
+  ```json
+  {
+    "ciphertext": "base64_string",
+    "iv": "base64_string_12_bytes",
+    "authTag": "base64_string_16_bytes"
+  }
+  ```
+* **Pola Enkripsi (dalam `crypto.ts`)**:
+  ```typescript
+  const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv);
+  ```
+  Setiap enkripsi menghasilkan **IV (Initialization Vector) 12-byte acak** agar mengenkripsi teks yang sama dua kali menghasilkan hasil sandi (*ciphertext*) yang berbeda, mempersulit penyerang menganalisis pola rahasia.
+
+### B. Protokol Login 2FA yang Aman (MFA Pending JWT)
+Saat pengguna dengan MFA aktif memasukkan email & password yang benar, server tidak boleh langsung mengeluarkan token akses berumur panjang atau me-log masuk sesi mereka.
+* **MFA Pending Token**: Kita menggunakan Token JWT khusus (`mfaToken`) dengan umur sangat pendek (3 menit) yang ditandatangani menggunakan kunci privat RSA server.
+  ```typescript
+  // Payload mfaToken
+  {
+    "sub": "userId",
+    "type": "mfa_pending"
+  }
+  ```
+* **Mengapa pola ini aman?**
+  1. Token ini tidak memiliki izin akses apa pun pada API platform (tidak lolos `authenticateJwt` biasa karena tipenya bukan `access`).
+  2. Satu-satunya kegunaan token ini adalah untuk dikirimkan ke endpoint `POST /auth/login/mfa` bersama kode OTP 6-digit untuk memverifikasi langkah kedua login.
+
+### C. Backup Recovery Codes
+Ketika mengaktifkan MFA, server secara otomatis menghasilkan **8 buah backup recovery codes** berupa string acak heksadesimal 10 karakter.
+* **Metode Penyimpanan**: Kode cadangan ini sangat sensitif. Kita menyimpannya di database sebagai **bcrypt hash** (sama seperti password), bukan teks biasa.
+* **Validasi Sekali Pakai**: Saat pengguna kehilangan ponsel mereka dan memasukkan kode pemulihan untuk login, server membandingkan input dengan hash bcrypt. Jika cocok, kode pemulihan tersebut **dihapus secara permanen** dari database (`user.mfaRecoveryCodes` difilter) agar tidak bisa digunakan kembali oleh orang lain yang mungkin mengintipnya (*one-time use validation*).
+
+### D. Bypass Rute Otorisasi pada MFA Enforcement
+* **Enforcement Middleware**: Jika organisasi mewajibkan MFA (`settings.mfaRequired: true`), semua panggilan API pengguna akan diblokir dengan `403 Forbidden` jika pengguna belum menyalakan MFA.
+* **Pengecualian Rute Akun (`isAuthRoute`)**:
+  ```typescript
+  const isAuthRoute = req.originalUrl.includes('/api/v1/auth');
+  ```
+  Kita wajib mengecualikan seluruh rute autentikasi akun sendiri agar pengguna yang belum menyalakan MFA tetap bisa memanggil `/auth/mfa/setup` dan `/auth/mfa/activate` untuk mendaftarkan TOTP mereka. Jika tidak dikecualikan, pengguna akan terkunci selamanya (*deadlock*) karena tidak bisa mengakses halaman pendaftaran MFA akibat terblokir oleh aturan MFA itu sendiri.
+

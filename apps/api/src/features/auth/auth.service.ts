@@ -1,9 +1,11 @@
 import crypto from 'crypto';
 import type { AuthRepository } from './auth.repository';
 import type { RegisterDto, LoginDto, PasswordChangeDto, User } from './auth.types';
-import { hashPassword, comparePassword, generateRandomToken, hashSha256 } from '../../lib/crypto';
-import { signAccessToken } from '../../lib/jwt';
-import { ConflictError, UnauthorizedError, NotFoundError } from '../../lib/errors';
+import { hashPassword, comparePassword, generateRandomToken, hashSha256, encryptGcm, decryptGcm, type EncryptedPayload } from '../../lib/crypto';
+import { signAccessToken, signMfaPendingToken, verifyMfaPendingToken } from '../../lib/jwt';
+import { ConflictError, UnauthorizedError, NotFoundError, ValidationError } from '../../lib/errors';
+import { authenticator } from 'otplib';
+import QRCode from 'qrcode';
 
 export class AuthService {
   constructor(private readonly authRepo: AuthRepository) {}
@@ -26,7 +28,10 @@ export class AuthService {
     return userDoc.toJSON() as unknown as User;
   }
 
-  async login(dto: LoginDto): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+  async login(dto: LoginDto): Promise<
+    | { requiresMfa: false; accessToken: string; refreshToken: string; user: User }
+    | { requiresMfa: true; mfaToken: string; user: User }
+  > {
     const userDoc = await this.authRepo.findUserByEmail(dto.email);
     if (!userDoc || !userDoc.isActive) {
       throw new UnauthorizedError('Invalid credentials', 'INVALID_CREDENTIALS');
@@ -35,6 +40,16 @@ export class AuthService {
     const isPasswordValid = await comparePassword(dto.password, userDoc.passwordHash);
     if (!isPasswordValid) {
       throw new UnauthorizedError('Invalid credentials', 'INVALID_CREDENTIALS');
+    }
+
+    // Check if MFA is enabled
+    if (userDoc.mfaEnabled) {
+      const mfaToken = signMfaPendingToken(userDoc.id);
+      return {
+        requiresMfa: true,
+        mfaToken,
+        user: userDoc.toJSON() as unknown as User,
+      };
     }
 
     // Update lastLoginAt
@@ -71,6 +86,7 @@ export class AuthService {
     });
 
     return {
+      requiresMfa: false,
       accessToken,
       refreshToken: rawRefreshToken,
       user: userDoc.toJSON() as unknown as User,
@@ -167,6 +183,161 @@ export class AuthService {
 
     // Revoke all refresh tokens for this user (FR-AUTH-10)
     await RefreshTokenModel.updateMany({ userId: userDoc._id }, { isRevoked: true }).exec();
+  }
+
+  async verifyLoginMfa(mfaToken: string, token: string): Promise<{ accessToken: string; refreshToken: string; user: User }> {
+    const decoded = verifyMfaPendingToken(mfaToken);
+    const userDoc = await this.authRepo.findUserById(decoded.sub);
+    if (!userDoc || !userDoc.isActive) {
+      throw new UnauthorizedError('User not found or inactive');
+    }
+
+    let verified = false;
+    if (userDoc.mfaSecret) {
+      const encryptedPayload = JSON.parse(userDoc.mfaSecret) as EncryptedPayload;
+      const secret = decryptGcm(encryptedPayload);
+      verified = authenticator.verify({ token, secret });
+    }
+
+    if (!verified) {
+      // Check recovery codes
+      for (const hashedCode of userDoc.mfaRecoveryCodes) {
+        if (await comparePassword(token, hashedCode)) {
+          // Match found! Remove the used recovery code
+          userDoc.mfaRecoveryCodes = userDoc.mfaRecoveryCodes.filter(c => c !== hashedCode);
+          verified = true;
+          break;
+        }
+      }
+    }
+
+    if (!verified) {
+      throw new UnauthorizedError('Invalid MFA code or recovery code');
+    }
+
+    // Update lastLoginAt
+    userDoc.lastLoginAt = new Date();
+    await userDoc.save();
+
+    // Check for active organization membership
+    const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
+    const orgId = membership ? membership.organizationId.toString() : '';
+    const role = membership ? membership.role : 'none';
+
+    // Generate tokens
+    const accessToken = signAccessToken({
+      sub: userDoc.id,
+      email: userDoc.email,
+      orgId,
+      role,
+    });
+
+    const rawRefreshToken = generateRandomToken();
+    const refreshTokenHash = hashSha256(rawRefreshToken);
+    const family = crypto.randomUUID();
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await this.authRepo.createRefreshToken({
+      tokenHash: refreshTokenHash,
+      userId: userDoc.id,
+      organizationId: orgId ? orgId : '000000000000000000000000',
+      family,
+      expiresAt,
+    });
+
+    return {
+      accessToken,
+      refreshToken: rawRefreshToken,
+      user: userDoc.toJSON() as unknown as User,
+    };
+  }
+
+  async setupMfa(userId: string): Promise<{ secret: string; qrCodeUrl: string }> {
+    const userDoc = await this.authRepo.findUserById(userId);
+    if (!userDoc) {
+      throw new NotFoundError('User', userId);
+    }
+
+    const secret = authenticator.generateSecret();
+    const otpauth = authenticator.keyuri(userDoc.email, 'SELADEV', secret);
+    const qrCodeUrl = await QRCode.toDataURL(otpauth);
+
+    const encryptedPayload = encryptGcm(secret);
+    userDoc.mfaSecret = JSON.stringify(encryptedPayload);
+    userDoc.mfaEnabled = false; // Not enabled until activated
+    await userDoc.save();
+
+    return { secret, qrCodeUrl };
+  }
+
+  async activateMfa(userId: string, token: string): Promise<{ recoveryCodes: string[] }> {
+    const userDoc = await this.authRepo.findUserById(userId);
+    if (!userDoc) {
+      throw new NotFoundError('User', userId);
+    }
+
+    if (!userDoc.mfaSecret) {
+      throw new ValidationError([], 'MFA setup has not been initiated');
+    }
+
+    const encryptedPayload = JSON.parse(userDoc.mfaSecret) as EncryptedPayload;
+    const secret = decryptGcm(encryptedPayload);
+
+    const isValid = authenticator.verify({ token, secret });
+    if (!isValid) {
+      throw new UnauthorizedError('Invalid verification code');
+    }
+
+    // Generate 8 backup recovery codes (each 10 hex characters)
+    const rawRecoveryCodes = Array.from({ length: 8 }, () => generateRandomToken(5));
+    const hashedRecoveryCodes = await Promise.all(
+      rawRecoveryCodes.map(code => hashPassword(code))
+    );
+
+    userDoc.mfaEnabled = true;
+    userDoc.mfaRecoveryCodes = hashedRecoveryCodes;
+    await userDoc.save();
+
+    return { recoveryCodes: rawRecoveryCodes };
+  }
+
+  async disableMfa(userId: string, token: string): Promise<void> {
+    const userDoc = await this.authRepo.findUserById(userId);
+    if (!userDoc) {
+      throw new NotFoundError('User', userId);
+    }
+
+    if (!userDoc.mfaEnabled) {
+      throw new ValidationError([], 'MFA is not enabled');
+    }
+
+    let verified = false;
+    if (userDoc.mfaSecret) {
+      const encryptedPayload = JSON.parse(userDoc.mfaSecret) as EncryptedPayload;
+      const secret = decryptGcm(encryptedPayload);
+      verified = authenticator.verify({ token, secret });
+    }
+
+    if (!verified) {
+      // Check recovery codes
+      for (const hashedCode of userDoc.mfaRecoveryCodes) {
+        if (await comparePassword(token, hashedCode)) {
+          verified = true;
+          break;
+        }
+      }
+    }
+
+    if (!verified) {
+      throw new UnauthorizedError('Invalid MFA code or recovery code');
+    }
+
+    userDoc.mfaEnabled = false;
+    userDoc.mfaSecret = null;
+    userDoc.mfaRecoveryCodes = [];
+    await userDoc.save();
   }
 }
 
