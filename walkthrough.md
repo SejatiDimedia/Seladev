@@ -50,6 +50,39 @@ Single Page Application (SPA) berbasis React yang di-bundle menggunakan Vite.
 
 ---
 
+## 5. Modul Identity & Access (Auth, Orgs, dan RBAC)
+Kami telah menerapkan infrastruktur keamanan tingkat lanjut untuk identitas pengguna dan kontrol akses organisasi.
+
+- **Mongoose Models**:
+  - `user.model.ts`: Skema data pengguna dengan metode JSON transformer untuk menyembunyikan password hash dan data MFA.
+  - `organization.model.ts`: Skema data tenant penyewa dengan pembatasan rencana (plan) dan kuota maksimum.
+  - `membership.model.ts`: Pemetaan relasi User ↔ Organization ↔ Role dengan indeks komposit unik.
+  - `refresh-token.model.ts`: Model penyimpan refresh token hash dengan indeks waktu kedaluwarsa (TTL index) untuk pembersihan otomatis.
+- **Kriptografi & JWT (RS256)**:
+  - `lib/crypto.ts`: Utilitas untuk enkripsi password bcrypt (12 rounds), hashing SHA-256 untuk token, dan penurunan kunci organisasi deterministik (HKDF).
+  - `lib/jwt.ts`: Pembangkit dan verifikator token akses menggunakan algoritma kunci asimetris RS256. Dilengkapi fitur *self-healing* yang otomatis memproduksi pasangan kunci RSA baru secara lokal jika kunci `.env` masih dummy.
+- **Fitur Autentikasi (`src/features/auth/`)**:
+  - Menyediakan workflow registrasi (`/register`), masuk (`/login`), keluar (`/logout`), perputaran token (`/refresh`), dan penggantian password (`/password`).
+  - Menerapkan **Refresh Token Rotation (RTR)** secara penuh dengan pengawasan pemakaian ulang (*reuse detection*) yang secara otomatis membatalkan seluruh keluarga token (*token family*) jika terindikasi adanya serangan pemutaran ulang token.
+- **Fitur Organisasi (`src/features/organizations/`)**:
+  - Menyediakan layanan pembentukan organisasi, pencarian data org, undangan anggota, pembaruan hak akses, dan pemecatan anggota.
+  - Memproteksi hak pencipta agar tidak bisa menghapus diri sendiri jika merupakan satu-satunya owner aktif (*sole owner validation*).
+- **Middlewares Keamanan (`src/middleware/`)**:
+  - `authenticate-jwt.ts`: Memvalidasi JWT di header Authorization dan memeriksa daftar cekkal (*blocklist*) sesi aktif di Redis.
+  - `authorize-rbac.ts`: Middleware dinamis untuk memvalidasi tingkatan akses pengguna pada dua tingkat (organisasi dan proyek).
+
+---
+
+## 6. Resolusi Hambatan Kompilasi (Build Fixes)
+Kami menyelesaikan beberapa hambatan kompilasi TypeScript agar seluruh workspace monorepo terkompilasi bersih tanpa error:
+- **Konfigurasi Path Monorepo (`TS6059`)**: Mengarahkan pemetaan `paths` di `apps/api/tsconfig.json` ke file deklarasi compiled `.d.ts` di dalam folder `dist` paket lokal, alih-alih mengarah langsung ke sumber `.ts` asli yang berada di luar direktori `rootDir`.
+- **Deklarasi Tipe Aplikasi (`TS2742`)**: Menonaktifkan pembuatan file `.d.ts` (`declaration: false`) untuk aplikasi server `apps/api`, karena file deklarasi tipe tidak diperlukan untuk aplikasi leaf node (non-pustaka). Ini menghilangkan error tipe portabilitas router Express.
+- **Konstrain Serialisasi Mongoose (`TS2790`)**: Melakukan casting `ret as any` pada transformer `.toJSON()` model `User`, `Organization`, `Membership`, dan `RefreshToken` untuk menghindari kesalahan typescript saat melakukan perintah `delete` pada properti wajib/opsional.
+- **Penyelarasan Tipe Tanggal Mongoose**: Mengecualikan properti `lastLoginAt` dan `joinedAt` dari pewarisan tipe package dan mendeklarasikannya sebagai objek `Date | null` di tingkat Model Document agar selaras dengan tipe runtime Mongoose.
+- **Keselarasan ValidationError & Dummy Credentials**: Menyesuaikan parameter argumen instansiasi `ValidationError` dan mengganti inisialisasi dummy UUID webcrypto dengan dummy ObjectId 24-karakter heksadesimal standar agar lolos validasi database.
+
+---
+
 ## Langkah Menjalankan Secara Lokal
 1. Pastikan Docker Engine / Docker Desktop Anda aktif.
 2. Jalankan database:

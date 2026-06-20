@@ -3,7 +3,14 @@
   "compilerOptions": {
     "lib": ["ES2022"],
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "declaration": false,
+    "declarationMap": false,
+    "paths": {
+      "@seladev/types": ["../../packages/types/dist/index.d.ts"],
+      "@seladev/validators": ["../../packages/validators/dist/index.d.ts"],
+      "@seladev/utils": ["../../packages/utils/dist/index.d.ts"]
+    }
   },
   "include": ["src/**/*"]
 }

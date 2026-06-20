@@ -1,9 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { notFoundHandler } from './middleware/not-found';
 import { globalErrorHandler } from './middleware/error-handler';
 import { config } from './config';
+
+// Features Imports
+import { MongooseAuthRepository, AuthService, AuthController, initAuthRoutes } from './features/auth';
+import { MongooseOrganizationsRepository, OrganizationsService, OrganizationsController, initOrganizationsRoutes } from './features/organizations';
 
 export function createApp(): express.Application {
   const app = express();
@@ -29,6 +34,7 @@ export function createApp(): express.Application {
   // Body parsers
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+  app.use(cookieParser());
 
   // Request Logger
   app.use((req, res, next) => {
@@ -41,6 +47,21 @@ export function createApp(): express.Application {
     });
     next();
   });
+
+  // Dependencies Injection
+  const authRepo = new MongooseAuthRepository();
+  const authService = new AuthService(authRepo);
+  const authController = new AuthController(authService);
+  const authRoutes = initAuthRoutes(authController);
+
+  const orgRepo = new MongooseOrganizationsRepository();
+  const orgService = new OrganizationsService(orgRepo);
+  const orgController = new OrganizationsController(orgService);
+  const orgRoutes = initOrganizationsRoutes(orgController);
+
+  // Mount API Features
+  app.use('/api/v1/auth', authRoutes);
+  app.use('/api/v1/organizations', orgRoutes);
 
   // Health check routes
   app.get('/health', (_req, res) => {

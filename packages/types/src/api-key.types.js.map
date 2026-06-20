@@ -1,0 +1,10 @@
+{
+    "version": 3,
+    "file": "api-key.types.js",
+    "sourceRoot": "",
+    "sources": [
+        "api-key.types.ts"
+    ],
+    "names": [],
+    "mappings": ""
+}
