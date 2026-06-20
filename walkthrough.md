@@ -133,6 +133,24 @@ Kami merancang dan mengimplementasikan fitur manajemen rahasia terenkripsi (Secr
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 15 skenario tes integrasi menyeluruh di `src/features/secrets/__tests__/secrets.test.ts` untuk memverifikasi fungsionalitas enkripsi GCM, batasan role berdasarkan tipe environment, perputaran versi, rollback, dan penghapusan kaskade. Seluruh skenario tes berhasil lulus cleanly.
 
+### 5.4 API Keys & Environment Scoping (Phase 3.4 & Phase 4.4)
+Kami merancang dan mengimplementasikan fitur autentikasi mesin-ke-mesin menggunakan API Keys dengan pembatasan lingkup proyek dan lingkungan secara ketat:
+- **Format API Key Premium (Base58)**:
+  - API Key dihasilkan dengan format `sdv_sk_` diikuti oleh 32 random bytes yang di-encode menggunakan Base58 (`sdv_sk_<base58_entropy>`).
+  - Base58 dipilih karena mengeliminasi karakter yang membingungkan secara visual (seperti `0`, `O`, `I`, `l`) dan aman untuk URL.
+- **Penyimpanan Hashing SHA-256 (Tanpa Menyimpan Plaintext)**:
+  - Demi keamanan tingkat tinggi, plaintext key **hanya dikembalikan sekali saja** saat pembuatan key dan tidak dapat diambil kembali.
+  - Di database, hanya SHA-256 hash dari key tersebut yang disimpan. Proses lookup saat autentikasi mencocokkan SHA-256 hash dengan waktu lookup O(1) yang cepat dan aman dari timing attacks.
+- **Middlewares API Key & Scope Intersections**:
+  - `authenticateJwt` mendeteksi token dengan prefiks `sdv_sk_` dan memvalidasi keaktifan serta waktu kedaluwarsanya.
+  - Memeriksa irisan cakupan izin API Key (`secrets:read`, `secrets:write`, dll.) dengan metode HTTP dan path request.
+  - Mewarisi peran organisasi dari pemilik kunci untuk mencegah eskalasi hak istimewa (*privilege escalation*).
+- **Pembatasan Lingkup Proyek & Lingkungan (Project & Environment Scoping)**:
+  - API Key dapat dibatasi ke tingkat organisasi (akses semua proyek), ke proyek tertentu (`projectId`), atau bahkan ke lingkungan tertentu saja (`environmentId` - misalnya hanya boleh mengakses `development`).
+  - Aturan ini diverifikasi secara berlapis di tingkat middleware autentikasi dan langsung di dalam `SecretsService` untuk memastikan integritas data. Jika dilanggar, API mengembalikan respons `403 Forbidden` (`ForbiddenError`).
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 15 skenario tes integrasi menyeluruh di `src/features/api-keys/__tests__/api-keys.test.ts` untuk menguji pembuatan, hashing, penonaktifan, pembatasan scope, dan penolakan akses lintas proyek/lingkungan. Seluruh tes berhasil lulus (total **49 passed tests** di seluruh suite).
+
 ---
 
 

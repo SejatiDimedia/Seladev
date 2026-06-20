@@ -11,6 +11,7 @@ import { MongooseAuthRepository, AuthService, AuthController, initAuthRoutes } f
 import { MongooseOrganizationsRepository, OrganizationsService, OrganizationsController, initOrganizationsRoutes } from './features/organizations';
 import { MongooseProjectsRepository, ProjectsService, ProjectsController, initProjectsRoutes } from './features/projects';
 import { MongooseSecretsRepository, SecretsService, SecretsController, initSecretsRoutes } from './features/secrets';
+import { MongooseApiKeysRepository, ApiKeysService, ApiKeysController, initApiKeysRoutes } from './features/api-keys';
 
 
 export function createApp(): express.Application {
@@ -72,11 +73,17 @@ export function createApp(): express.Application {
   const secretsController = new SecretsController(secretsService, projectsService);
   const secretsRoutes = initSecretsRoutes(secretsController);
 
+  const apiKeysRepo = new MongooseApiKeysRepository();
+  const apiKeysService = new ApiKeysService(apiKeysRepo, projectsRepo, orgRepo);
+  const apiKeysController = new ApiKeysController(apiKeysService);
+  const apiKeysRoutes = initApiKeysRoutes(apiKeysController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
   app.use('/api/v1', projectsRoutes);
   app.use('/api/v1', secretsRoutes);
+  app.use('/api/v1', apiKeysRoutes);
 
 
   // Health check routes

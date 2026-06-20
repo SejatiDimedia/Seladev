@@ -16,6 +16,8 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 9. [Keamanan MFA / TOTP & Enkripsi AES-256-GCM](#9-keamanan-mfa--totp-enkripsi-aes-256-gcm)
 10. [Manajemen Proyek, Lingkungan (Environments), dan Keanggotaan Proyek](#10-manajemen-proyek-lingkungan-environments-dan-keanggotaan-proyek)
 11. [Manajemen Secrets & Riwayat Versi (Secrets & Versioning)](#11-manajemen-secrets--riwayat-versi-secrets--versioning)
+12. [Modul API Keys & Autentikasi Mesin-ke-Mesin (Machine-to-Machine Auth)](#12-modul-api-keys--autentikasi-mesin-ke-mesin-machine-to-machine-auth)
+13. [Pembatasan Lingkup API Keys (Project & Environment Scoping)](#13-pembatasan-lingkup-api-keys-project--environment-scoping)
 
 ---
 
@@ -460,9 +462,45 @@ Aturan keamanan diperketat berdasarkan status proteksi lingkungan (`isProtected`
 * Pada **protected environment** (seperti `production`), pengembang biasa diblokir dengan respons `403 Forbidden` (`ForbiddenError`) jika mencoba mengungkap (reveal) atau memodifikasi rahasia. Hanya pemilik peran administratif (`project:admin` atau `org:admin/owner`) yang diizinkan untuk melakukannya.
 
 ### E. Immutability & Riwayat Versi (Versioning)
-Setiap kali rahasia ditulis atau diperbarui:
 1. Bidang versi (`version`) dalam dokumen `Secret` dinaikkan secara berurutan (*monotonic version counter*).
 2. Dokumen versi lama disimpan secara permanen dan tidak dapat diubah (*immutable history*) di dalam koleksi `SecretVersion`.
 3. Saat melakukan **Rollback** (`POST /projects/:projectId/secrets/:secretId/rollback`), rahasia utama akan memulihkan data enkripsinya ke versi target tertentu. Tindakan rollback ini sendiri dicatat sebagai versi baru yang bertambah (misalnya, me-rollback versi 2 ke versi 1 pada secret berversi 3 akan menghasilkan versi baru yaitu 4) untuk mempertahankan audit trail yang bersih dari semua perubahan historis.
 
+---
 
+## 12. Modul API Keys & Autentikasi Mesin-ke-Mesin (Machine-to-Machine Auth)
+
+API Keys digunakan oleh sistem otomatis seperti CI/CD pipelines (GitHub Actions, GitLab CI), scripts kustom, atau CLI tools untuk berinteraksi dengan API SELADEV tanpa memerlukan sesi interaktif user manusia.
+
+### A. Format API Key dengan Prefiks Terstandar
+Setiap API Key yang dihasilkan mengikuti format:
+`sdv_sk_` + `Base58(32 random bytes)`
+* **Prefiks `sdv_sk_`**: Prefiks statis membantu pendeteksian otomatis (Secret Scanning) oleh sistem deteksi keamanan pihak ketiga (seperti GitGuardian, GitHub Secret Scanning, atau Trufflehog) jika pengembang tidak sengaja melakukan commit kode kunci ke repositori publik.
+* **Base58 (URL-Safe)**: Base58 mengecualikan karakter ambigu visual (seperti angka `0`, huruf `O`, angka `1`, dan huruf `l`). Hal ini memastikan key mudah disalin oleh manusia tanpa risiko salah ketik.
+
+### B. Penyimpanan One-Way Hashing SHA-256
+API Key adalah kredensial yang sangat sensitif. Untuk meminimalkan risiko jika database bocor, SELADEV menerapkan pola keamanan **Display Once, Never Retrieve**:
+1. Plaintext API Key hanya dihasilkan dan dikembalikan sekali di respons API sesaat setelah pembuatan. Server **tidak pernah** menyimpan plaintext key ini di disk atau log.
+2. Di database, server hanya menyimpan **SHA-256 hash** dari key tersebut.
+3. Saat request masuk membawa API Key di header `Authorization: Bearer sdv_sk_...`, server menghitung SHA-256 hash dari token tersebut dan mencocokkannya ke database.
+* **Mengapa SHA-256, bukan bcrypt?** bcrypt sengaja dirancang lambat (~300ms) untuk mencegah serangan brute force pada password yang biasanya rentan karena dipilih manusia. API Key memiliki entropi tinggi acak 256-bit, sehingga tidak rentan terhadap serangan kamus (*dictionary attack*). SHA-256 jauh lebih cepat (di bawah mikrodetik), sangat ideal untuk autentikasi per-request tanpa menambah latensi.
+
+---
+
+## 13. Pembatasan Lingkup API Keys (Project & Environment Scoping)
+
+Untuk membatasi dampak jika suatu kredensial bocor (*blast radius reduction*), API Key di SELADEV dirancang dengan pembatasan hak akses yang presisi (Least Privilege Principle).
+
+### A. Irisan Otorisasi (Scope Intersection dengan RBAC)
+API Key membawa array `scopes` (seperti `secrets:read`, `secrets:write`, dll.). Saat autentikasi, server melakukan pengecekan ganda:
+1. API Key harus memiliki scope yang sesuai untuk operasi yang dipanggil.
+2. Pembuat/Pemilik API Key tersebut harus memiliki peran organisasi (RBAC) yang sah untuk operasi tersebut.
+Hal ini mencegah eskalasi hak istimewa (*privilege escalation*). Jika admin membuat key dengan scope `secrets:write` lalu admin tersebut diturunkan perannya menjadi `viewer`, key tersebut otomatis kehilangan kemampuan menulis karena pemiliknya tidak lagi memiliki wewenang tersebut.
+
+### B. Pembatasan Lingkup Proyek (Project Scoping)
+* Kunci yang dikonfigurasi dengan `projectId: null` dapat mengakses seluruh proyek di organisasi (Org-scoped).
+* Kunci dengan `projectId` tertentu dibatasi hanya pada proyek tersebut. Jika kunci proyek A mencoba memanggil endpoint proyek B, server mengembalikan respons `403 Forbidden` (`ForbiddenError`).
+
+### C. Pembatasan Lingkup Lingkungan (Environment Scoping)
+* Phase 4.4 menambahkan dukungan `environmentId` opsional untuk membatasi API Key hanya pada lingkungan tertentu saja (misalnya hanya boleh membaca/menulis secrets di lingkungan `development`).
+* Aturan ini ditegakkan di dalam `SecretsService` secara ketat pada setiap operasi baca/tulis rahasia. Jika API Key mencoba mengakses rahasia di lingkungan lain, ia akan langsung ditolak dengan `ForbiddenError`.

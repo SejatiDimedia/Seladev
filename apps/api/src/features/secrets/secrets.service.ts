@@ -9,6 +9,14 @@ import { encryptGcm, decryptGcm } from '../../lib/crypto';
 import type { SecretDocument } from '../../infrastructure/database/models/secret.model';
 import type { SecretVersionDocument } from '../../infrastructure/database/models/secret-version.model';
 
+export interface SecretsUser {
+  id: string;
+  role: string;
+  projectRole?: string;
+  apiKeyProjectId?: string | null;
+  apiKeyEnvironmentId?: string | null;
+}
+
 export class SecretsService {
   constructor(
     private readonly secretsRepo: SecretsRepository,
@@ -16,10 +24,26 @@ export class SecretsService {
   ) {}
 
   /**
+   * Helper to enforce API key project and environment boundaries.
+   */
+  private enforceApiKeyScoping(
+    user: SecretsUser,
+    projectId: string,
+    environmentId: string
+  ): void {
+    if (user.apiKeyProjectId && user.apiKeyProjectId !== projectId) {
+      throw new ForbiddenError('API key is scoped to a different project');
+    }
+    if (user.apiKeyEnvironmentId && user.apiKeyEnvironmentId !== environmentId) {
+      throw new ForbiddenError('API key is scoped to a different environment');
+    }
+  }
+
+  /**
    * Helper to check access for reading/revealing secrets.
    */
   private async checkReadAccess(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     environmentId: string
   ): Promise<void> {
     const env = await this.projectsRepo.findEnvironmentById(environmentId);
@@ -48,7 +72,7 @@ export class SecretsService {
    * Helper to check access for writing (create/update/delete/rollback) secrets.
    */
   private async checkWriteAccess(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     environmentId: string
   ): Promise<void> {
     const env = await this.projectsRepo.findEnvironmentById(environmentId);
@@ -74,13 +98,16 @@ export class SecretsService {
   }
 
   async createSecret(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     environmentId: string,
     key: string,
     value: string,
     expiresAt?: Date | null
   ): Promise<SecretDocument> {
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, environmentId);
+
     // 1. Verify project exists
     const project = await this.projectsRepo.findProjectById(projectId);
     if (!project) {
@@ -137,10 +164,13 @@ export class SecretsService {
   }
 
   async listSecrets(
-    _user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     environmentId: string
   ): Promise<SecretDocument[]> {
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, environmentId);
+
     // 1. Verify environment exists and belongs to project
     const env = await this.projectsRepo.findEnvironmentById(environmentId);
     if (!env || env.projectId.toString() !== projectId) {
@@ -152,7 +182,7 @@ export class SecretsService {
   }
 
   async getSecretMetadata(
-    _user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string
   ): Promise<SecretDocument> {
@@ -160,11 +190,15 @@ export class SecretsService {
     if (!secret || secret.projectId.toString() !== projectId) {
       throw new NotFoundError('Secret', secretId);
     }
+
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
+
     return secret;
   }
 
   async revealSecret(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string
   ): Promise<{ secret: SecretDocument; plaintextValue: string }> {
@@ -172,6 +206,9 @@ export class SecretsService {
     if (!secret || secret.projectId.toString() !== projectId) {
       throw new NotFoundError('Secret', secretId);
     }
+
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
 
     // Enforce read access (reveal) control
     await this.checkReadAccess(user, secret.environmentId.toString());
@@ -194,7 +231,7 @@ export class SecretsService {
   }
 
   async updateSecret(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string,
     value: string
@@ -203,6 +240,9 @@ export class SecretsService {
     if (!secret || secret.projectId.toString() !== projectId) {
       throw new NotFoundError('Secret', secretId);
     }
+
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
 
     // Enforce write access control
     await this.checkWriteAccess(user, secret.environmentId.toString());
@@ -235,7 +275,7 @@ export class SecretsService {
   }
 
   async deleteSecret(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string
   ): Promise<void> {
@@ -243,6 +283,9 @@ export class SecretsService {
     if (!secret || secret.projectId.toString() !== projectId) {
       throw new NotFoundError('Secret', secretId);
     }
+
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
 
     // Enforce write access control
     await this.checkWriteAccess(user, secret.environmentId.toString());
@@ -256,7 +299,7 @@ export class SecretsService {
 
   // Versioning & Rollback operations (Phase 2.3)
   async listSecretVersions(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string
   ): Promise<SecretVersionDocument[]> {
@@ -265,6 +308,9 @@ export class SecretsService {
       throw new NotFoundError('Secret', secretId);
     }
 
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
+
     // Listing version metadata requires reveal/read access check since it is restricted to those who can see secret info
     await this.checkReadAccess(user, secret.environmentId.toString());
 
@@ -272,7 +318,7 @@ export class SecretsService {
   }
 
   async rollbackSecret(
-    user: { id: string; role: string; projectRole?: string },
+    user: SecretsUser,
     projectId: string,
     secretId: string,
     versionNumber: number
@@ -281,6 +327,9 @@ export class SecretsService {
     if (!secret || secret.projectId.toString() !== projectId) {
       throw new NotFoundError('Secret', secretId);
     }
+
+    // Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, secret.environmentId.toString());
 
     // Enforce write access control (rollback is a write operation)
     await this.checkWriteAccess(user, secret.environmentId.toString());
