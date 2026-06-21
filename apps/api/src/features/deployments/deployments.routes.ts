@@ -48,5 +48,12 @@ export function initDeploymentsRoutes(deploymentsController: DeploymentsControll
     deploymentsController.rejectDeployment
   );
 
+  router.post(
+    '/projects/:projectId/deployments/:deploymentId/promote',
+    authenticateJwt,
+    authorizeRbac({ requiredProjectRole: 'developer' }),
+    deploymentsController.promoteDeployment
+  );
+
   return router;
 }

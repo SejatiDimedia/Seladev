@@ -22,6 +22,7 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 15. [Modul Audit Logs, Kepatuhan SOC2, dan Immutability Trail](#15-modul-audit-logs-kepatuhan-soc2-dan-immutability-trail)
 16. [Modul Webhooks & Asynchronous Delivery](#16-modul-webhooks--asynchronous-delivery-phase-36)
 17. [Modul SSO (Single Sign-On): SAML 2.0 & OpenID Connect (OIDC)](#17-modul-sso-single-sign-on-saml-20--openid-connect-oidc-phase-42)
+18. [Modul Real CI/CD Integration & SELADEV CLI](#18-modul-real-cicd-integration--seladev-cli-phase-31)
 
 ---
 
@@ -682,8 +683,6 @@ Konfigurasi SSO per-organisasi dapat berisi data sensitif seperti Client Secret 
 * **Assertion Parsing & Signature Verification**: Saat IdP mengirimkan kembali `SAMLResponse` via HTTP POST, server mengurai XML respon tersebut, memvalidasi tanda tangan XML menggunakan sertifikat X509 milik IdP yang terdaftar, dan mengambil atribut profil pengguna (seperti email, nama depan, dan nama belakang).
 
 ### D. Alur OpenID Connect (OIDC) & CSRF Protection
-* **Redis State Tracking**: Sebelum mengarahkan pengguna ke URL otorisasi OIDC, server menghasilkan token state acak dan menyimpannya di Redis dengan TTL 15 menit. State ini disertakan dalam request otorisasi.
-* **Callback Validation**: Ketika OIDC provider (seperti Google Workspace) mengirimkan authorization code kembali ke server, server memverifikasi state yang dikirimkan dengan state yang tersimpan di Redis. Jika tidak cocok, request ditolak (perlindungan terhadap serangan Cross-Site Request Forgery / CSRF).
 * **ID Token Verification**: Server menukar code otorisasi dengan ID Token (JWT), mendekodenya, dan memverifikasi isi payload token untuk mendapatkan data profil pengguna.
 
 ### E. Just-In-Time (JIT) Provisioning
@@ -691,4 +690,30 @@ Ketika pengguna berhasil masuk melalui SSO (SAML atau OIDC):
 1. **User Auto-Creation**: Jika akun pengguna belum terdaftar di platform, sistem otomatis membuat akun baru di database dengan flag password non-aktif (`sso-only:<provider>:entropy`).
 2. **Membership Auto-Assignment**: Sistem secara otomatis membuat keanggotaan (`Membership`) pengguna baru tersebut ke dalam organisasi terkait dengan wewenang dasar `member` dan status aktif.
 
+---
 
+## 18. Modul Real CI/CD Integration & SELADEV CLI (Phase 3.1)
+
+Modul **Real CI/CD Integration & SELADEV CLI** memperkenalkan paket CLI monorepo baru (`@seladev/cli`) untuk berinteraksi dengan platform secara lokal/CI, endpoint API bulk reveal untuk secrets, dan promosi deployment. Berikut adalah konsep penting yang wajib dipelajari:
+
+### A. Arsitektur CLI Mandiri dengan Native Fetch & Readline
+Untuk meminimalkan waktu startup dan overhead dependensi, CLI `@seladev/cli` dirancang dengan sangat ringan:
+- **Tanpa Library HTTP Eksternal**: CLI menggunakan native `fetch` (tersedia secara bawaan di Node.js v18+) alih-alih axios atau superagent.
+- **Custom Argument Parsing**: Menguraikan parameter baris perintah secara manual menggunakan loop sederhana pada `process.argv` untuk mempercepat pemrosesan tanpa perlu memuat parser kompleks seperti commander atau yargs.
+- **Password Input Masking**: Mengimplementasikan pembacaan password interaktif menggunakan `process.stdin.setRawMode(true)` dan readline, yang secara otomatis meredam echoing input asli di terminal dan menggantinya dengan simbol asterisk (`*`) untuk menjaga kerahasiaan saat pengguna mengetik kata sandi.
+
+### B. Otentikasi CLI & Auto-Refresh Token Handshake
+CLI menyimpan data autentikasi lokal pada mesin pengembang di berkas `~/.config/seladev/config.json`.
+- **401 Auto-Refresh Handshake**: Saat memanggil API platform, CLI membungkus request menggunakan `authenticatedFetch`. Jika API mengembalikan status `401 Unauthorized` karena token akses JWT telah kedaluwarsa (umur JWT 15 menit), pembungkus ini secara otomatis memotong alur kerja untuk melakukan pembaruan token:
+  1. Mengirim `refreshToken` lokal ke endpoint `/api/v1/auth/refresh`.
+  2. Mengurai token akses baru dan token refresh baru (dari header `Set-Cookie` respon).
+  3. Memperbarui berkas konfigurasi lokal.
+  4. Mengulangi request asli pengguna dengan token baru secara transparan tanpa mengganggu alur kerja CLI.
+
+### C. Bulk Secrets Pull & Decrypted Streaming
+- **Keuntungan Endpoint Tunggal**: Daripada melakukan request HTTP berulang untuk setiap variabel (yang memakan bandwidth dan waktu), CLI menggunakan endpoint bulk reveal (`POST /api/v1/projects/:projectId/environments/:envId/secrets/reveal-all`).
+- **Pencatatan Audit Terperinci**: Walaupun data ditarik secara massal dalam satu payload, server secara internal meliterasi setiap secret dan mencatat entri log audit `secret.revealed` **secara terpisah** untuk masing-masing rahasia. Hal ini menjaga keakuratan audit kepatuhan SOC2 untuk pelacakan akses data sensitif.
+
+### D. Deployment Promotions & Git Version Cloning
+- **Mekanisme Promosi**: Dibandingkan dengan men-trigger deployment baru dari awal (yang memerlukan spesifikasi ulang branch/commit), promosi deployment (`POST /deployments/:deploymentId/promote`) menyalin deployment sukses yang sudah ada dari satu lingkungan (misalnya `development` atau `staging`) dan mempromosikannya ke lingkungan target berikutnya (misalnya `production`).
+- **Kekekalan Metadata**: Kloning menyalin data Git versi aslinya secara persis (branch, commit SHA, dan commit message). Ini menjamin bahwa kode yang lulus pengujian di staging adalah kode yang **persis sama** yang masuk ke production, meminimalisir kesalahan manusia (*human-error*).

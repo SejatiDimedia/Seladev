@@ -1,0 +1,19 @@
+{
+  "name": "@seladev/cli",
+  "version": "1.0.0",
+  "private": true,
+  "bin": {
+    "seladev": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node ./dist/index.js"
+  },
+  "dependencies": {
+    "@seladev/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5"
+  }
+}

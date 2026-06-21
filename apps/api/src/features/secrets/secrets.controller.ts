@@ -154,4 +154,17 @@ export class SecretsController {
       data: secret.toJSON(),
     });
   });
+
+  revealAllSecrets = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const projectId = req.params.projectId!;
+    const envId = req.params.envId!;
+
+    const user = await this.getUserWithProjRole(req, projectId);
+    const decryptedList = await this.secretsService.revealAllSecrets(user, projectId, envId, this.getClientContext(req));
+
+    res.status(200).json({
+      success: true,
+      data: decryptedList,
+    });
+  });
 }

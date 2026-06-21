@@ -28,7 +28,10 @@ export class DeploymentsService {
   ) {}
 
   private async verifyProjectAccess(user: { id: string; role: string; orgId: string }, projectId: string) {
-    const project = await this.projectsRepo.findProjectById(projectId);
+    let project = await this.projectsRepo.findProjectById(projectId);
+    if (!project && user.orgId) {
+      project = await this.projectsRepo.findProjectBySlug(user.orgId, projectId);
+    }
     if (!project || project.organizationId.toString() !== user.orgId) {
       throw new NotFoundError('Project', projectId);
     }
@@ -47,10 +50,14 @@ export class DeploymentsService {
     clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
     const project = await this.verifyProjectAccess(user, projectId);
+    const resolvedProjectId = project.id;
 
-    // 1. Verify environment exists and belongs to project
-    const env = await this.projectsRepo.findEnvironmentById(dto.environmentId);
-    if (!env || env.projectId.toString() !== projectId) {
+    // 1. Verify environment exists and belongs to project (resolve by ID or slug)
+    let env = await this.projectsRepo.findEnvironmentById(dto.environmentId);
+    if (!env) {
+      env = await this.projectsRepo.findEnvironmentBySlug(resolvedProjectId, dto.environmentId);
+    }
+    if (!env || env.projectId.toString() !== resolvedProjectId) {
       throw new NotFoundError('Environment', dto.environmentId);
     }
 
@@ -85,7 +92,7 @@ export class DeploymentsService {
     // 4. Create Deployment record
     const deployment = await this.deploymentsRepo.createDeployment({
       organizationId: project.organizationId.toString(),
-      projectId,
+      projectId: resolvedProjectId,
       environmentId: env.id,
       version: dto.commitHash ? dto.commitHash.slice(0, 7) : 'v1.0.0', // Fallback version
       branch,
@@ -105,7 +112,7 @@ export class DeploymentsService {
         {
           deploymentId: deployment.id,
           orgId: project.organizationId.toString(),
-          projectId,
+          projectId: resolvedProjectId,
           environmentId: env.id,
           triggeredBy: user.id,
           gitRef: branch,
@@ -123,7 +130,7 @@ export class DeploymentsService {
     if (this.auditLogsService) {
       this.auditLogsService.record({
         organizationId: project.organizationId.toString(),
-        projectId,
+        projectId: resolvedProjectId,
         actor: {
           userId: user.id,
           ipAddress: clientContext?.ipAddress || null,
@@ -142,7 +149,7 @@ export class DeploymentsService {
     }
 
     if (this.webhookPublisher && !requiresApproval) {
-      this.webhookPublisher.publish('deployment.queued', project.organizationId.toString(), projectId, {
+      this.webhookPublisher.publish('deployment.queued', project.organizationId.toString(), resolvedProjectId, {
         deployment: {
           id: deployment.id,
           status: 'queued',
@@ -163,10 +170,11 @@ export class DeploymentsService {
     deploymentId: string,
     clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
-    await this.verifyProjectAccess(user, projectId);
+    const project = await this.verifyProjectAccess(user, projectId);
+    const resolvedProjectId = project.id;
 
     const deployment = await this.deploymentsRepo.findDeploymentById(deploymentId);
-    if (!deployment || deployment.projectId.toString() !== projectId) {
+    if (!deployment || deployment.projectId.toString() !== resolvedProjectId) {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
@@ -205,7 +213,7 @@ export class DeploymentsService {
       {
         deploymentId: updated.id,
         orgId: updated.organizationId.toString(),
-        projectId,
+        projectId: resolvedProjectId,
         environmentId: updated.environmentId.toString(),
         triggeredBy: updated.triggeredBy.toString(),
         gitRef: updated.branch || 'main',
@@ -222,7 +230,7 @@ export class DeploymentsService {
     if (this.auditLogsService) {
       this.auditLogsService.record({
         organizationId: updated.organizationId.toString(),
-        projectId,
+        projectId: resolvedProjectId,
         actor: {
           userId: user.id,
           ipAddress: clientContext?.ipAddress || null,
@@ -239,7 +247,7 @@ export class DeploymentsService {
     }
 
     if (this.webhookPublisher) {
-      this.webhookPublisher.publish('deployment.queued', updated.organizationId.toString(), projectId, {
+      this.webhookPublisher.publish('deployment.queued', updated.organizationId.toString(), resolvedProjectId, {
         deployment: {
           id: updated.id,
           status: 'queued',
@@ -260,10 +268,11 @@ export class DeploymentsService {
     deploymentId: string,
     clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
-    await this.verifyProjectAccess(user, projectId);
+    const project = await this.verifyProjectAccess(user, projectId);
+    const resolvedProjectId = project.id;
 
     const deployment = await this.deploymentsRepo.findDeploymentById(deploymentId);
-    if (!deployment || deployment.projectId.toString() !== projectId) {
+    if (!deployment || deployment.projectId.toString() !== resolvedProjectId) {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
@@ -299,7 +308,7 @@ export class DeploymentsService {
     if (this.auditLogsService) {
       this.auditLogsService.record({
         organizationId: updated.organizationId.toString(),
-        projectId,
+        projectId: resolvedProjectId,
         actor: {
           userId: user.id,
           ipAddress: clientContext?.ipAddress || null,
@@ -324,10 +333,11 @@ export class DeploymentsService {
     deploymentId: string,
     clientContext?: { ipAddress: string | null; userAgent: string | null }
   ): Promise<DeploymentDocument> {
-    await this.verifyProjectAccess(user, projectId);
+    const project = await this.verifyProjectAccess(user, projectId);
+    const resolvedProjectId = project.id;
 
     const deployment = await this.deploymentsRepo.findDeploymentById(deploymentId);
-    if (!deployment || deployment.projectId.toString() !== projectId) {
+    if (!deployment || deployment.projectId.toString() !== resolvedProjectId) {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
@@ -357,7 +367,7 @@ export class DeploymentsService {
     if (this.auditLogsService) {
       this.auditLogsService.record({
         organizationId: deployment.organizationId.toString(),
-        projectId,
+        projectId: resolvedProjectId,
         actor: {
           userId: user.id,
           ipAddress: clientContext?.ipAddress || null,
@@ -398,7 +408,7 @@ export class DeploymentsService {
       }
 
       if (this.webhookPublisher) {
-        this.webhookPublisher.publish('deployment.cancelled', updated.organizationId.toString(), projectId, {
+        this.webhookPublisher.publish('deployment.cancelled', updated.organizationId.toString(), resolvedProjectId, {
           deployment: {
             id: updated.id,
             status: 'cancelled',
@@ -430,10 +440,10 @@ export class DeploymentsService {
     projectId: string,
     deploymentId: string
   ): Promise<DeploymentDocument> {
-    await this.verifyProjectAccess(user, projectId);
+    const project = await this.verifyProjectAccess(user, projectId);
 
     const deployment = await this.deploymentsRepo.findDeploymentById(deploymentId);
-    if (!deployment || deployment.projectId.toString() !== projectId) {
+    if (!deployment || deployment.projectId.toString() !== project.id) {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
@@ -447,7 +457,136 @@ export class DeploymentsService {
     cursor?: string | null,
     filters?: DeploymentFilters
   ): Promise<{ deployments: DeploymentDocument[]; hasNext: boolean; nextCursor: string | null }> {
-    await this.verifyProjectAccess(user, projectId);
-    return this.deploymentsRepo.listHistory(projectId, limit, cursor, filters);
+    const project = await this.verifyProjectAccess(user, projectId);
+    return this.deploymentsRepo.listHistory(project.id, limit, cursor, filters);
+  }
+
+  async promoteDeployment(
+    user: { id: string; role: string; orgId: string },
+    projectId: string,
+    deploymentId: string,
+    targetEnvSlugOrId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<DeploymentDocument> {
+    const project = await this.verifyProjectAccess(user, projectId);
+    const resolvedProjectId = project.id;
+
+    // 1. Fetch original deployment
+    const sourceDeployment = await this.deploymentsRepo.findDeploymentById(deploymentId);
+    if (!sourceDeployment || sourceDeployment.projectId.toString() !== resolvedProjectId) {
+      throw new NotFoundError('Deployment', deploymentId);
+    }
+
+    // Ensure original deployment was successful
+    if (sourceDeployment.status !== 'success') {
+      throw new ValidationError([], `Only successful deployments can be promoted. Current status: ${sourceDeployment.status}`);
+    }
+
+    // 2. Resolve target environment by ID or slug
+    let env = await this.projectsRepo.findEnvironmentById(targetEnvSlugOrId);
+    if (!env) {
+      env = await this.projectsRepo.findEnvironmentBySlug(resolvedProjectId, targetEnvSlugOrId);
+    }
+    if (!env || env.projectId.toString() !== resolvedProjectId) {
+      throw new NotFoundError('Environment', targetEnvSlugOrId);
+    }
+
+    // Cannot promote to the same environment
+    if (sourceDeployment.environmentId.toString() === env.id) {
+      throw new ValidationError([], 'Cannot promote deployment to the same environment it was deployed to');
+    }
+
+    // 3. Determine if manual approval is required
+    const requiresApproval = env.isProtected && project.settings?.deploymentProtection;
+    const initialStatus: DeploymentStatus = requiresApproval ? 'pending_approval' : 'queued';
+
+    // Retrieve source environment to get its name for status history message
+    const sourceEnv = await this.projectsRepo.findEnvironmentById(sourceDeployment.environmentId.toString());
+    const sourceEnvName = sourceEnv ? sourceEnv.name : 'unknown';
+
+    const timestamp = new Date();
+    const statusHistory: StatusEvent[] = [
+      {
+        status: initialStatus,
+        timestamp: timestamp.toISOString(),
+        message: requiresApproval
+          ? `Deployment promoted from ${sourceEnvName} (pending manual approval for protected environment)`
+          : `Deployment promoted from ${sourceEnvName} and queued`,
+      },
+    ];
+
+    // 4. Create promoted Deployment record
+    const promotedDeployment = await this.deploymentsRepo.createDeployment({
+      organizationId: project.organizationId.toString(),
+      projectId: resolvedProjectId,
+      environmentId: env.id,
+      version: sourceDeployment.version,
+      branch: sourceDeployment.branch,
+      commitSha: sourceDeployment.commitSha,
+      commitMessage: sourceDeployment.commitMessage,
+      status: initialStatus,
+      statusHistory,
+      triggeredBy: user.id,
+      triggeredVia: 'api', // triggered via API/CLI
+    });
+
+    // 5. If no approval needed, add job to BullMQ queue
+    if (!requiresApproval) {
+      const queue = getDeploymentsQueue();
+      await queue.add('deployment-job', {
+        deploymentId: promotedDeployment.id,
+        orgId: project.organizationId.toString(),
+      });
+    }
+
+    // 6. Record audit log
+    if (this.auditLogsService) {
+      this.auditLogsService.record({
+        organizationId: project.organizationId.toString(),
+        projectId: resolvedProjectId,
+        actor: {
+          userId: user.id,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        action: 'deployment.promoted',
+        resource: { type: 'deployment', id: promotedDeployment.id, name: promotedDeployment.version },
+        outcome: 'success',
+        metadata: {
+          sourceDeploymentId: deploymentId,
+          sourceEnvironmentId: sourceDeployment.environmentId.toString(),
+          targetEnvironmentId: env.id,
+          status: initialStatus,
+          apiKeyId: (user as any).apiKeyId || null,
+        },
+      }).catch(err => console.error('Failed to log audit:', err));
+    }
+
+    // 7. Publish Webhook
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish(
+        'deployment.triggered',
+        project.organizationId.toString(),
+        resolvedProjectId,
+        {
+          deployment: {
+            id: promotedDeployment.id,
+            version: promotedDeployment.version,
+            environmentId: env.id,
+            status: initialStatus,
+            triggeredBy: {
+              userId: user.id,
+            },
+            triggeredVia: 'api',
+            metadata: {
+              promoted: true,
+              sourceDeploymentId: deploymentId,
+            }
+          }
+        }
+      ).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
+    return promotedDeployment;
   }
 }

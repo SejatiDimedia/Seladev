@@ -21,6 +21,13 @@ export function initSecretsRoutes(secretsController: SecretsController): Router 
     secretsController.listSecrets
   );
 
+  router.post(
+    '/projects/:projectId/environments/:envId/secrets/reveal-all',
+    authenticateJwt,
+    authorizeRbac({ requiredProjectRole: 'developer' }),
+    secretsController.revealAllSecrets
+  );
+
   // Single secret operations
   router.get(
     '/projects/:projectId/secrets/:secretId',

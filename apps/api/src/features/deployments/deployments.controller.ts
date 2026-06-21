@@ -5,6 +5,7 @@ import type { ProjectsService } from '../projects/projects.service';
 import { triggerDeploymentSchema } from './deployments.schema';
 import type { DeploymentStatus } from '@seladev/types';
 import type { DeploymentFilters } from './deployments.types';
+import { ValidationError } from '../../lib/errors';
 
 export class DeploymentsController {
   constructor(
@@ -134,6 +135,30 @@ export class DeploymentsController {
     const deployment = await this.deploymentsService.rejectDeployment(user, projectId, deploymentId, this.getClientContext(req));
 
     res.status(200).json({
+      success: true,
+      data: deployment.toJSON(),
+    });
+  });
+
+  promoteDeployment = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const projectId = req.params.projectId!;
+    const deploymentId = req.params.deploymentId!;
+    const { targetEnvironmentId } = req.body;
+
+    if (!targetEnvironmentId) {
+      throw new ValidationError([], 'targetEnvironmentId must be provided in request body');
+    }
+
+    const user = await this.getUserWithProjRole(req, projectId);
+    const deployment = await this.deploymentsService.promoteDeployment(
+      user,
+      projectId,
+      deploymentId,
+      targetEnvironmentId,
+      this.getClientContext(req)
+    );
+
+    res.status(201).json({
       success: true,
       data: deployment.toJSON(),
     });

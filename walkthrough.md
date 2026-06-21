@@ -236,6 +236,29 @@ Kami merancang dan mengimplementasikan fitur autentikasi terintegrasi **Single S
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 9 skenario tes integrasi komprehensif di `src/features/sso/__tests__/sso.test.ts` untuk memverifikasi fungsionalitas CRUD konfigurasi, discovery domain, penanganan callback SAML/OIDC, JIT provisioning, dan enforcement login. Seluruh tes berhasil lulus 100% (total **92 passed tests** di seluruh monorepo).
 
+### 5.9 Integrasi Real CI/CD & SELADEV CLI (Phase 3.1)
+Kami merancang dan mengimplementasikan modul baru untuk integrasi alur kerja CI/CD otomatis beserta antarmuka baris perintah (CLI) pendukung:
+- **Paket Monorepo Baru `@seladev/cli`**:
+  - Menyediakan berkas [package.json](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/packages/cli/package.json), [tsconfig.json](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/packages/cli/tsconfig.json), dan [index.ts](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/packages/cli/src/index.ts).
+  - CLI menggunakan native Node.js `fetch` tanpa dependensi eksternal yang besar untuk performa startup instan.
+  - Mendukung shebang `#!/usr/bin/env node` agar dapat dijalankan secara global via npm atau locally menggunakan `npx seladev`.
+- **Fitur Command Line Interface (CLI)**:
+  - `login`: Mengambil input Email, Password, serta token MFA TOTP secara interaktif dan aman (dengan password masking input), melakukan autentikasi ke server, dan menyimpan credentials (`accessToken`, `refreshToken`, `email`, `organizationId`) di berkas lokal `~/.config/seladev/config.json`.
+  - `secrets pull --project <slug_or_id> --env <slug_or_id> [--out <file>]`: Mengambil seluruh rahasia dalam bentuk plaintext dari server dan menulisnya dalam format standar `.env`.
+  - `deploy --project <slug_or_id> --env <slug_or_id> --branch <branch> [--commit <sha>] [--message <msg>]`: Memicu alur pembangunan (build pipeline) baru untuk environment tertentu.
+  - `status --project <slug_or_id> --deployment <id>`: Memantau status deployment beserta keluaran log build (build logs) baris-per-baris.
+- **Bulk Secrets Reveal API & Otorisasi Ketat**:
+  - Endpoint baru `POST /api/v1/projects/:projectId/environments/:envId/secrets/reveal-all` untuk mendukung penarikan rahasia massal oleh CLI.
+  - Mengharuskan otorisasi minimal `developer` pada standard environment, serta wewenang `admin`/`owner` pada protected environment.
+  - Mencatat log audit `secret.revealed` untuk **setiap** rahasia yang didekripsi secara individual demi kepatuhan SOC2.
+- **Deployment Promotion API**:
+  - Endpoint baru `POST /api/v1/projects/:projectId/deployments/:deploymentId/promote` untuk melakukan promosi deployment sukses ke target environment baru.
+  - Menduplikasi metadata Git (branch, commit SHA, commit message) dan memicu build pipeline baru di target environment (termasuk status tertahan `pending_approval` jika target env dilindungi).
+- **Resolusi Slug Cerdas pada Backend**:
+  - Menyelaraskan seluruh endpoints deployments dan secrets agar mendukung pencarian project & environment berdasarkan **Slug** (nama) maupun **ObjectId** database secara dinamis.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat integration tests di `apps/api/src/features/secrets/__tests__/secrets-bulk.test.ts` (6 tes) dan `apps/api/src/features/deployments/__tests__/deployments-promotion.test.ts` (6 tes) untuk menjamin kualitas fitur bulk reveal dan promosi deployment. Seluruh tes monorepo (104 tes) berhasil lulus dengan bersih.
+
 ---
 
 ## Langkah Menjalankan Secara Lokal

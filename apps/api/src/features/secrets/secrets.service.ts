@@ -14,6 +14,7 @@ export interface SecretsUser {
   id: string;
   email?: string;
   role: string;
+  orgId?: string;
   projectRole?: string;
   apiKeyProjectId?: string | null;
   apiKeyEnvironmentId?: string | null;
@@ -545,5 +546,89 @@ export class SecretsService {
     }
 
     return secret;
+  }
+
+  async revealAllSecrets(
+    user: SecretsUser,
+    projectSlugOrId: string,
+    envSlugOrId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<{ key: string; value: string }[]> {
+    // 1. Resolve project by ID or slug
+    let project = await this.projectsRepo.findProjectById(projectSlugOrId);
+    if (!project && user.orgId) {
+      project = await this.projectsRepo.findProjectBySlug(user.orgId, projectSlugOrId);
+    }
+    if (!project) {
+      throw new NotFoundError('Project', projectSlugOrId);
+    }
+
+    const projectId = project.id;
+
+    // 2. Resolve environment by ID or slug
+    let env = await this.projectsRepo.findEnvironmentById(envSlugOrId);
+    if (!env) {
+      env = await this.projectsRepo.findEnvironmentBySlug(projectId, envSlugOrId);
+    }
+    if (!env || env.projectId.toString() !== projectId) {
+      throw new NotFoundError('Environment', envSlugOrId);
+    }
+
+    const environmentId = env.id;
+
+    // 3. Enforce API key project & environment boundaries
+    this.enforceApiKeyScoping(user, projectId, environmentId);
+
+    // 4. Enforce read access control
+    await this.checkReadAccess(user, environmentId);
+
+    // 5. Get all secrets for this environment
+    const secrets = await this.secretsRepo.listSecretsByEnv(environmentId);
+
+    const decryptedList: { key: string; value: string }[] = [];
+
+    // 6. Decrypt each secret and record audit log
+    for (const secret of secrets) {
+      const plaintextValue = decryptGcm(
+        {
+          ciphertext: secret.encryptedValue,
+          iv: secret.iv,
+          authTag: secret.authTag,
+        },
+        secret.organizationId.toString()
+      );
+
+      decryptedList.push({
+        key: secret.key,
+        value: plaintextValue,
+      });
+
+      // Update last accessed
+      secret.lastAccessedAt = new Date();
+      await secret.save();
+
+      // Record audit log for EACH secret revealed
+      if (this.auditLogsService) {
+        this.auditLogsService.record({
+          organizationId: secret.organizationId.toString(),
+          projectId,
+          actor: {
+            userId: user.id,
+            ipAddress: clientContext?.ipAddress || null,
+            userAgent: clientContext?.userAgent || null,
+          },
+          action: 'secret.revealed',
+          resource: { type: 'secret', id: secret.id, name: secret.key },
+          outcome: 'success',
+          metadata: {
+            environmentId,
+            apiKeyId: (user as any).apiKeyId || null,
+            bulk: true,
+          },
+        });
+      }
+    }
+
+    return decryptedList;
   }
 }
