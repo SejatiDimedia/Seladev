@@ -6,3 +6,5 @@ export * from './api-key.schemas';
 export * from './deployment.schemas';
 export * from './webhook.schemas';
 export * from './member.schemas';
+export * from './notification.schemas';
+

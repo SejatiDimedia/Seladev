@@ -25,6 +25,8 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 18. [Modul Real CI/CD Integration & SELADEV CLI](#18-modul-real-cicd-integration--seladev-cli-phase-31)
 19. [Modul GraphQL Endpoint (SDL, DataLoader, & Subscriptions)](#19-modul-graphql-endpoint-sdl-dataloader--subscriptions-phase-32)
 20. [Modul Analytics Dashboard & Agregasi MongoDB](#20-modul-analytics-dashboard--agregasi-mongodb-phase-33)
+21. [Modul Team Workspaces & Multi-Tenancy Dinamis](#21-modul-team-workspaces--multi-tenancy-dinamis-phase-34)
+22. [Modul Sistem Notifikasi, Preferensi, & Expiration Checks](#22-modul-sistem-notifikasi-preferensi--expiration-checks-phase-18--phase-38)
 
 ---
 
@@ -859,5 +861,52 @@ Bagi pengguna yang bekerja di berbagai organisasi (misalnya developer yang meman
 Dalam kepatuhan tingkat Enterprise (SOC2), operator platform atau auditor memerlukan akses pengawasan penuh:
 - **`isPlatformAdmin`**: Flag boolean khusus pada `UserModel` yang menandai status administrator platform.
 - **Bypass Tenant Boundary**: Endpoint lintas workspace `GET /api/v1/audit-logs` memvalidasi status `req.user.isPlatformAdmin`. Jika benar, ia akan memanggil repositori kueri audit logs tanpa menyematkan filter batas `organizationId` tertentu, mengembalikan semua sejarah audit platform.
+
+---
+
+## 22. Modul Sistem Notifikasi, Preferensi, & Expiration Checks (Phase 1.8 / Phase 3.8)
+
+Modul **Sistem Notifikasi** dirancang untuk mendistribusikan pemberitahuan secara real-time dan asinkron mengenai aktivitas platform yang penting (seperti status deployment, kegagalan webhook, dan perubahan keanggotaan) serta melakukan pemeriksaan terjadwal (cron job) terhadap rahasia dan kunci API yang akan kedaluwarsa.
+
+### A. Komunikasi Real-Time In-App via Socket.IO
+Untuk menghadirkan pengalaman pengguna yang premium, notifikasi dalam aplikasi dialirkan secara langsung tanpa perlu melakukan refresh halaman (*polling bypass*):
+- **Handshake & Room Join**: Ketika klien tersambung ke Socket.IO, server memverifikasi token JWT mereka. Begitu tersambung, klien secara otomatis dimasukkan ke room khusus pengguna berdasarkan ID mereka: `user:${userId}`.
+- **Event Emission**: Saat notifikasi baru dibuat di basis data, server mengirimkan event `notification:received` yang berisi payload dokumen notifikasi beserta jumlah total notifikasi yang belum dibaca (*unread count*).
+- **Aksi Pembacaan (Read Actions)**: Saat pengguna menandai notifikasi sebagai dibaca (`markAsRead` / `markAllAsRead`), server mengirimkan event `notification:unread_count_updated` agar antarmuka pengguna (UI) dapat langsung memperbarui lencana counter secara real-time.
+
+### B. Antrean Pekerjaan Asinkron & Email Worker (BullMQ + Nodemailer)
+Mengirim email secara sinkron saat memproses request HTTP akan merusak performa server (membuat API lambat akibat latensi SMTP server eksternal). Oleh karena itu, kita memisahkan proses pengiriman email menggunakan BullMQ:
+1. **Penerbitan Job (`email-notifications` queue)**: Saat notifikasi dibuat, jika preferensi email pengguna aktif, sistem memicu penambahan job `send-email` ke antrean BullMQ.
+2. **Pemrosesan Asinkron (`email-notification.worker.ts`)**: Worker BullMQ yang terisolasi mengambil pekerjaan dari antrean secara asinkron di latar belakang.
+3. **SMTP & Fallback Mock Logging**: Worker menggunakan `nodemailer` untuk mengirim email melalui protokol SMTP. Jika SMTP tidak dikonfigurasi di `.env` (misalnya di lingkungan development/testing lokal), worker secara cerdas menangkap ketiadaan konfigurasi tersebut dan melakukan *mock logging* visual ke konsol server tanpa menggagalkan status antrean kerja (*graceful fallback*).
+
+### C. Pengaturan Preferensi Notifikasi & Kebijakan Bypass Keamanan
+Agar tidak mengganggu kenyamanan pengguna dengan email spam, setiap pengguna diberikan kendali penuh atas preferensi mereka untuk empat jenis event utama: `deployment`, `secret`, `apiKey`, dan `webhook`.
+- **Default State**: Pengguna baru secara otomatis memiliki preferensi default aktif (`true`) untuk in-app dan email untuk semua kategori.
+- **Dynamic Filter Checking**: Sebelum mendistribusikan notifikasi, `NotificationsService` mengevaluasi objek preferensi pengguna:
+  ```typescript
+  if (type.startsWith('deployment.')) {
+    inAppEnabled = preferences?.deployment?.inApp !== false;
+    emailEnabled = preferences?.deployment?.email !== false;
+  } // ...
+  ```
+- **Security Bypass (Critical Overrides)**: Beberapa event kritis (seperti perubahan peran `role.changed` dan penambahan anggota `member.added`) menyangkut keamanan akun dan isolasi multi-tenant. Pengguna **tidak boleh** menonaktifkan pemberitahuan untuk jenis event ini. Logika kode di `NotificationsService` secara sengaja melewatkan filter preferensi untuk event keamanan kritis, memastikan notifikasi selalu sampai di in-app dan email demi auditabilitas keamanan platform.
+
+### D. System Task Scheduler: Daily Expiration Cron Job
+Salah satu risiko kebocoran data terbesar adalah kunci API dan Secrets yang dibiarkan aktif setelah masa berlaku habis. Modul ini menyertakan deteksi proaktif:
+- **Repeatable Jobs (Cron)**: Mengonfigurasi antrean BullMQ `system-tasks` untuk menjalankan tugas `check-expirations` sekali setiap hari menggunakan ekspresi cron (`0 0 * * *`).
+- **Query Deteksi Expiration**:
+  ```typescript
+  const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const expiringSecrets = await SecretModel.find({
+    expiresAt: { $gt: now, $lte: sevenDaysFromNow },
+    expiryNotified: false
+  });
+  ```
+  Ini mengisolasi data yang akan habis masa berlakunya dalam rentang 7 hari kedepan dan memastikan notifikasi belum pernah dikirim sebelumnya (`expiryNotified: false`).
+- **Notifikasi Admin Proyek & Organisasi**:
+  - Untuk **Secrets**, sistem mencari semua administrator proyek (`role: 'admin'`) dalam daftar keanggotaan proyek dan mengirimkan notifikasi.
+  - Untuk **API Keys**, jika bertipe proyek, ia mendistribusikan ke admin proyek; jika bertipe organisasi, ia mendistribusikannya ke seluruh administrator organisasi (`owner`/`admin` aktif).
+- **Single-Notification Lock**: Setelah notifikasi dikirimkan, flag `expiryNotified` di-set menjadi `true` di database sehingga cron job di hari berikutnya tidak akan mengirimkan notifikasi duplikat ke pengguna yang sama.
 
 

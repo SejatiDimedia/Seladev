@@ -13,6 +13,11 @@ const envSchema = z.object({
   JWT_PRIVATE_KEY: z.string().min(1, 'JWT_PRIVATE_KEY is required'),
   JWT_PUBLIC_KEY: z.string().min(1, 'JWT_PUBLIC_KEY is required'),
   MASTER_ENCRYPTION_KEY: z.string().min(32, 'MASTER_ENCRYPTION_KEY must be at least 32 characters'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  SMTP_FROM: z.string().optional(),
 });
 
 const isTest = process.env.NODE_ENV === 'test';
@@ -55,6 +60,13 @@ export const config = {
   },
   security: {
     masterEncryptionKey: parsedEnv.data.MASTER_ENCRYPTION_KEY,
+  },
+  email: {
+    smtpHost: parsedEnv.data.SMTP_HOST || null,
+    smtpPort: parsedEnv.data.SMTP_PORT || null,
+    smtpUser: parsedEnv.data.SMTP_USER || null,
+    smtpPass: parsedEnv.data.SMTP_PASS || null,
+    smtpFrom: parsedEnv.data.SMTP_FROM || 'no-reply@seladev.dev',
   },
 } as const;
 

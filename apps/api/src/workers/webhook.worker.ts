@@ -6,6 +6,10 @@ import { WebhookDeliveryModel } from '../infrastructure/database/models/webhook-
 import { decryptGcm } from '../lib/crypto';
 import { isPrivateIp } from '../features/webhooks/webhook.validator';
 import dns from 'dns';
+import { MongooseNotificationsRepository } from '../features/notifications/notifications.repository';
+import { NotificationsService } from '../features/notifications/notifications.service';
+import { ProjectMemberModel } from '../infrastructure/database/models/project-member.model';
+import { MembershipModel } from '../infrastructure/database/models/membership.model';
 
 async function resolveAndCheckSSRF(urlStr: string): Promise<void> {
   const parsed = new URL(urlStr);
@@ -21,6 +25,50 @@ async function resolveAndCheckSSRF(urlStr: string): Promise<void> {
     if (isPrivateIp(address)) {
       throw new Error(`SSRF Protection: URL resolves to blocked IP address '${address}'`);
     }
+  }
+}
+
+const notificationsRepo = new MongooseNotificationsRepository();
+const notificationsService = new NotificationsService(notificationsRepo);
+
+async function notifyWebhookFailure(webhookId: string, reason: string) {
+  try {
+    const webhook = await WebhookModel.findById(webhookId).exec();
+    if (!webhook) return;
+
+    let admins: string[] = [];
+    if (webhook.projectId) {
+      const members = await ProjectMemberModel.find({
+        projectId: webhook.projectId,
+        role: 'admin',
+      }).exec();
+      admins = members.map(m => m.userId.toString());
+    } else {
+      const memberships = await MembershipModel.find({
+        organizationId: webhook.organizationId,
+        role: { $in: ['admin', 'owner'] },
+        status: 'active',
+      }).exec();
+      admins = memberships.map(m => m.userId.toString());
+    }
+
+    const message = `Webhook delivery failed for "${webhook.name}" (${webhook.url}). Reason: ${reason}`;
+    const link = webhook.projectId
+      ? `/projects/${webhook.projectId.toString()}/webhooks`
+      : `/settings`;
+
+    for (const adminId of admins) {
+      await notificationsService.createNotification(
+        adminId,
+        webhook.organizationId.toString(),
+        'webhook.delivery_failed',
+        'Webhook Delivery Failed',
+        message,
+        link
+      ).catch(err => console.error('Failed to notify webhook failure:', err));
+    }
+  } catch (err) {
+    console.error('Failed to notify webhook failure:', err);
   }
 }
 
@@ -200,6 +248,7 @@ export async function processWebhookDelivery(job: Job): Promise<void> {
       },
     }).exec();
     console.warn(`[Webhook Worker] Webhook '${webhookId}' disabled immediately due to HTTP 410 Gone.`);
+    await notifyWebhookFailure(webhookId, 'HTTP 410 Gone (Webhook disabled)').catch(err => console.error('Failed to notify webhook 410 failure:', err));
     return; // Don't throw, stop retrying
   }
 
@@ -212,6 +261,7 @@ export async function processWebhookDelivery(job: Job): Promise<void> {
       },
     }).exec();
     console.warn(`[Webhook Worker] Webhook '${webhookId}' auto-disabled due to 100 consecutive failures.`);
+    await notifyWebhookFailure(webhookId, '100 consecutive failures (Webhook disabled)').catch(err => console.error('Failed to notify webhook streak failure:', err));
     return; // Don't throw, stop retrying
   }
 
@@ -219,6 +269,8 @@ export async function processWebhookDelivery(job: Job): Promise<void> {
   if (!isLastAttempt) {
     throw new Error(errorMessage || 'Webhook delivery failed');
   }
+
+  await notifyWebhookFailure(webhookId, errorMessage || 'All retries exhausted').catch(err => console.error('Failed to notify webhook final retry failure:', err));
 }
 
 export function startWebhookWorker(): Worker {

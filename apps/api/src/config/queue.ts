@@ -41,3 +41,39 @@ export function getWebhooksQueue(): Queue {
   }
   return webhooksQueue;
 }
+
+let emailNotificationsQueue: Queue | null = null;
+
+export function getEmailNotificationsQueue(): Queue {
+  if (!emailNotificationsQueue) {
+    emailNotificationsQueue = new Queue('email-notifications', {
+      connection: queueConnection,
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: false,
+        attempts: 3,
+        backoff: {
+          type: 'exponential',
+          delay: 5000,
+        },
+      },
+    });
+  }
+  return emailNotificationsQueue;
+}
+
+let systemTasksQueue: Queue | null = null;
+
+export function getSystemTasksQueue(): Queue {
+  if (!systemTasksQueue) {
+    systemTasksQueue = new Queue('system-tasks', {
+      connection: queueConnection,
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: false,
+        attempts: 1,
+      },
+    });
+  }
+  return systemTasksQueue;
+}

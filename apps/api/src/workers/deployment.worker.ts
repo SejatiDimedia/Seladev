@@ -10,6 +10,11 @@ import { pubsub, DEPLOYMENT_STATUS_CHANGED, DEPLOYMENT_LOG_ADDED } from '../feat
 import { AuditLogsService } from '../features/audit-logs/audit-logs.service';
 import { MongooseWebhooksRepository } from '../features/webhooks/webhooks.repository';
 import { WebhookPublisher } from '../features/webhooks/webhook.publisher';
+import { MongooseNotificationsRepository } from '../features/notifications/notifications.repository';
+import { NotificationsService } from '../features/notifications/notifications.service';
+import { ProjectMemberModel } from '../infrastructure/database/models/project-member.model';
+import { ProjectModel } from '../infrastructure/database/models/project.model';
+import { EnvironmentModel } from '../infrastructure/database/models/environment.model';
 
 const auditLogsRepo = new MongooseAuditLogsRepository();
 const orgRepo = new MongooseOrganizationsRepository();
@@ -46,6 +51,46 @@ async function recordDeploymentAudit(
     if (process.env.NODE_ENV !== 'test') {
       console.error('Failed to record deployment audit log in worker:', err);
     }
+  }
+}
+
+const notificationsRepo = new MongooseNotificationsRepository();
+const notificationsService = new NotificationsService(notificationsRepo);
+
+async function notifyDeploymentCompletion(deploymentId: string, status: 'success' | 'failed') {
+  try {
+    const deployment = await DeploymentModel.findById(deploymentId).exec();
+    if (!deployment) return;
+
+    // Find all project members with developer role and above
+    const members = await ProjectMemberModel.find({
+      projectId: deployment.projectId,
+      role: { $in: ['admin', 'developer'] }
+    }).exec();
+
+    const project = await ProjectModel.findById(deployment.projectId).exec();
+    const env = await EnvironmentModel.findById(deployment.environmentId).exec();
+    const projectName = project ? project.name : 'Unknown';
+    const envName = env ? env.name : 'Unknown';
+
+    const type = status === 'success' ? 'deployment.succeeded' : 'deployment.failed';
+    const title = status === 'success' ? 'Deployment Succeeded' : 'Deployment Failed';
+    const statusText = status === 'success' ? 'succeeded' : 'failed';
+    const message = `Deployment for project "${projectName}" version "${deployment.version}" in environment "${envName}" has ${statusText}.`;
+    const link = `/projects/${deployment.projectId.toString()}/environments/${deployment.environmentId.toString()}/deployments`;
+
+    for (const member of members) {
+      await notificationsService.createNotification(
+        member.userId.toString(),
+        deployment.organizationId.toString(),
+        type,
+        title,
+        message,
+        link
+      ).catch(err => console.error('Failed to send deployment notification:', err));
+    }
+  } catch (err) {
+    console.error('Failed to notify deployment completion:', err);
   }
 }
 
@@ -226,6 +271,7 @@ export async function processDeployment(job: Job): Promise<void> {
         error: 'Container health check timeout',
       });
       await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: 'Container health check timeout', duration });
+      await notifyDeploymentCompletion(deploymentId, 'failed').catch(err => console.error('Failed to notify deployment failure:', err));
 
       webhookPublisher.publish('deployment.failed', orgId, projectId, {
         deployment: {
@@ -250,6 +296,7 @@ export async function processDeployment(job: Job): Promise<void> {
       );
       emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'success' });
       await recordDeploymentAudit(deploymentId, 'deployment.completed', 'success', { duration });
+      await notifyDeploymentCompletion(deploymentId, 'success').catch(err => console.error('Failed to notify deployment success:', err));
 
       webhookPublisher.publish('deployment.completed', orgId, projectId, {
         deployment: {
@@ -282,6 +329,7 @@ export async function processDeployment(job: Job): Promise<void> {
       error: err.message,
     });
     await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: err.message, duration });
+    await notifyDeploymentCompletion(deploymentId, 'failed').catch(notifyErr => console.error('Failed to notify deployment system failure:', notifyErr));
 
     webhookPublisher.publish('deployment.failed', orgId, projectId, {
       deployment: {

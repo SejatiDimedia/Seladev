@@ -1,4 +1,11 @@
-export type NotificationType = 'info' | 'success' | 'warning' | 'error';
+export type NotificationType =
+  | 'deployment.succeeded'
+  | 'deployment.failed'
+  | 'secret.expiring'
+  | 'api_key.expiring'
+  | 'webhook.delivery_failed'
+  | 'role.changed'
+  | 'member.added';
 
 export interface Notification {
   id: string;
@@ -11,3 +18,4 @@ export interface Notification {
   isRead: boolean;
   createdAt: string;
 }
+

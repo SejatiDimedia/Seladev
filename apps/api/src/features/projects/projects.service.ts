@@ -26,7 +26,8 @@ export class ProjectsService {
     private readonly projectsRepo: ProjectsRepository,
     private readonly orgRepo: OrganizationsRepository,
     private readonly auditLogsService?: AuditLogsService,
-    private readonly webhookPublisher?: any
+    private readonly webhookPublisher?: any,
+    private readonly notificationsService?: any
   ) {}
 
   async createProject(
@@ -440,6 +441,17 @@ export class ProjectsService {
       assignedBy,
     });
 
+    if (this.notificationsService) {
+      await this.notificationsService.createNotification(
+        dto.userId,
+        projectDoc.organizationId.toString(),
+        'member.added',
+        'Added to Project',
+        `You have been added to project "${projectDoc.name}" with role "${dto.role}".`,
+        `/projects/${projectId}/members`
+      ).catch((err: any) => console.error('Failed to notify project member addition:', err));
+    }
+
     if (this.auditLogsService) {
       this.auditLogsService.record({
         organizationId: projectDoc.organizationId.toString(),
@@ -480,6 +492,20 @@ export class ProjectsService {
 
     memberDoc.role = dto.role;
     await memberDoc.save();
+
+    if (this.notificationsService) {
+      const projectDoc = await this.projectsRepo.findProjectById(projectId);
+      const projectName = projectDoc ? projectDoc.name : 'Unknown';
+      const orgId = projectDoc ? projectDoc.organizationId.toString() : '';
+      await this.notificationsService.createNotification(
+        userId,
+        orgId,
+        'role.changed',
+        'Project Role Updated',
+        `Your role in project "${projectName}" has been updated to "${dto.role}".`,
+        `/projects/${projectId}/members`
+      ).catch((err: any) => console.error('Failed to notify project member role change:', err));
+    }
 
     return memberDoc.toJSON() as unknown as ProjectMember;
   }

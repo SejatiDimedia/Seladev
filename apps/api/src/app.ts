@@ -18,6 +18,13 @@ import { MongooseAuditLogsRepository, AuditLogsService, AuditLogsController, ini
 import { MongooseWebhooksRepository, WebhooksService, WebhookPublisher, WebhooksController, initWebhooksRoutes } from './features/webhooks';
 import { MongooseSsoRepository, SsoService, SsoController, initSsoRoutes } from './features/sso';
 import { AnalyticsService, AnalyticsController, initAnalyticsRoutes } from './features/analytics';
+import {
+  MongooseNotificationsRepository,
+  NotificationsService,
+  NotificationsController,
+  initNotificationsRoutes,
+  initNotificationPreferencesRoutes,
+} from './features/notifications';
 
 
 
@@ -72,17 +79,20 @@ export function createApp(): express.Application {
   const webhooksController = new WebhooksController(webhooksService);
   const webhooksRoutes = initWebhooksRoutes(webhooksController);
 
+  const notificationsRepo = new MongooseNotificationsRepository();
+  const notificationsService = new NotificationsService(notificationsRepo);
+
   const authRepo = new MongooseAuthRepository();
   const authService = new AuthService(authRepo, auditLogsService);
   const authController = new AuthController(authService);
   const authRoutes = initAuthRoutes(authController);
 
-  const orgService = new OrganizationsService(orgRepo, webhookPublisher);
+  const orgService = new OrganizationsService(orgRepo, webhookPublisher, notificationsService);
   const orgController = new OrganizationsController(orgService);
   const orgRoutes = initOrganizationsRoutes(orgController);
 
   const projectsRepo = new MongooseProjectsRepository();
-  const projectsService = new ProjectsService(projectsRepo, orgRepo, auditLogsService, webhookPublisher);
+  const projectsService = new ProjectsService(projectsRepo, orgRepo, auditLogsService, webhookPublisher, notificationsService);
   const projectsController = new ProjectsController(projectsService);
   const projectsRoutes = initProjectsRoutes(projectsController);
 
@@ -110,6 +120,10 @@ export function createApp(): express.Application {
   const analyticsController = new AnalyticsController(analyticsService);
   const analyticsRoutes = initAnalyticsRoutes(analyticsController);
 
+  const notificationsController = new NotificationsController(notificationsService);
+  const notificationsRoutes = initNotificationsRoutes(notificationsController);
+  const notificationPreferencesRoutes = initNotificationPreferencesRoutes(notificationsController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
@@ -122,6 +136,8 @@ export function createApp(): express.Application {
   app.use('/api/v1', webhooksRoutes);
   app.use('/api/v1', ssoRoutes);
   app.use('/api/v1', analyticsRoutes);
+  app.use('/api/v1/notifications', notificationsRoutes);
+  app.use('/api/v1/users/me/notification-preferences', notificationPreferencesRoutes);
 
 
 
@@ -177,7 +193,8 @@ export function createApp(): express.Application {
     auditLogsService,
     webhooksService,
     ssoService,
-    analyticsService
+    analyticsService,
+    notificationsService
   };
 
   // Global Error Handler

@@ -12,6 +12,7 @@ export interface SecretDocument extends Omit<Secret, 'id' | 'environmentId' | 'p
   keyVersion: number;
   lastAccessedAt: Date | null;
   expiresAt: Date | null;
+  expiryNotified: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -78,6 +79,10 @@ const SecretSchema = new Schema<SecretDocument>(
     expiresAt: {
       type: Date,
       default: null,
+    },
+    expiryNotified: {
+      type: Boolean,
+      default: false,
     },
   },
   {

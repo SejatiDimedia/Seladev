@@ -13,7 +13,8 @@ import mongoose from 'mongoose';
 export class OrganizationsService {
   constructor(
     private readonly orgRepo: OrganizationsRepository,
-    private readonly webhookPublisher?: any
+    private readonly webhookPublisher?: any,
+    private readonly notificationsService?: any
   ) {}
 
   async createOrg(
@@ -125,6 +126,19 @@ export class OrganizationsService {
 
     membership.role = dto.role as OrgRole;
     await membership.save();
+
+    if (this.notificationsService) {
+      const org = await this.orgRepo.findOrgById(orgId);
+      const orgName = org ? org.name : 'Unknown';
+      await this.notificationsService.createNotification(
+        userId,
+        orgId,
+        'role.changed',
+        'Organization Role Updated',
+        `Your role in organization "${orgName}" has been updated to "${dto.role}".`,
+        `/settings`
+      ).catch((err: any) => console.error('Failed to notify organization role change:', err));
+    }
 
     if (this.webhookPublisher) {
       this.webhookPublisher.publish('member.role_changed', orgId, null, {

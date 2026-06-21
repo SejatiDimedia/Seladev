@@ -12,6 +12,7 @@ export interface ApiKeyDocument extends Omit<ApiKey, 'id' | 'organizationId' | '
   lastUsedAt: Date | null;
   expiresAt: Date | null;
   isActive: boolean;
+  expiryNotified: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +74,10 @@ const ApiKeySchema = new Schema<ApiKeyDocument>(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    expiryNotified: {
+      type: Boolean,
+      default: false,
     },
   },
   {

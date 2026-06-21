@@ -63,6 +63,24 @@ const UserSchema = new Schema<UserDocument>(
       type: [String],
       default: [],
     },
+    notificationPreferences: {
+      deployment: {
+        inApp: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+      },
+      secret: {
+        inApp: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+      },
+      apiKey: {
+        inApp: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+      },
+      webhook: {
+        inApp: { type: Boolean, default: true },
+        email: { type: Boolean, default: true },
+      },
+    },
   },
   {
     timestamps: true,

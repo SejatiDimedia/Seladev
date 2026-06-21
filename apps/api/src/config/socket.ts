@@ -61,6 +61,14 @@ export function initSocketServer(server: HttpServer): Server {
       }
     }
 
+    const userId = socket.data.userId;
+    if (userId) {
+      socket.join(`user:${userId}`);
+      if (config.server.isDevelopment) {
+        console.log(`🔌 Client ${socket.id} joined room user:${userId}`);
+      }
+    }
+
     if (config.server.isDevelopment) {
       console.log(`🔌 Client connected: ${socket.id}`);
     }

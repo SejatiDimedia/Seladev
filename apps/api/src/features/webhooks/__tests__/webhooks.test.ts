@@ -84,6 +84,22 @@ vi.mock('../../../infrastructure/database/models/webhook-delivery.model', () => 
   },
 }));
 
+vi.mock('../../../infrastructure/database/models/project-member.model', () => ({
+  ProjectMemberModel: {
+    find: () => ({
+      exec: async () => [],
+    }),
+  },
+}));
+
+vi.mock('../../../infrastructure/database/models/membership.model', () => ({
+  MembershipModel: {
+    find: () => ({
+      exec: async () => [],
+    }),
+  },
+}));
+
 // 6. Helpers to build Mock Mongoose documents
 function createMockWebhookDoc(data: any) {
   const doc = {

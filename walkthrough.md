@@ -306,6 +306,13 @@ Kami merancang dan mengimplementasikan modul Team Workspaces untuk mendukung ars
 - **Visibilitas Audit Lintas Workspace (Platform Admin)**: Menyediakan endpoint `GET /api/v1/audit-logs` yang memungkinkan Platform Admin (`isPlatformAdmin: true`) melacak audit log seluruh tenant untuk kemudahan debugging dan investigasi kepatuhan.
 - **Pengujian Terotomatisasi (Vitest Suite)**: Membuat berkas pengujian integrasi baru `apps/api/src/features/organizations/__tests__/organizations.test.ts` (8 tes) yang mencakup verifikasi multi-org listing, context switching, X-Org-Id header overrides, dan cross-workspace audit logs visibility. Seluruh tes monorepo (130 tes) berhasil lulus cleanly.
 
+### 5.13 Sistem Notifikasi, Preferensi, & Expiration Checks (Phase 1.8 / Phase 3.8)
+Kami merancang dan mengimplementasikan Sistem Notifikasi menyeluruh berbasis real-time in-app event streaming dan antrean email asinkron:
+- **Komunikasi Real-time & Asinkron**: Mengintegrasikan Socket.IO ke room pengguna `user:${userId}` untuk menyalurkan log notifikasi dan pembaruan unread count secara langsung. Menggunakan BullMQ antrean `email-notifications` untuk mengirim email via `nodemailer` (dengan fallback mock logging ke konsol).
+- **Pengaturan Preferensi Pengguna & Security Bypass**: Menyimpan preferensi in-app/email pengguna untuk event deployments, secrets, API keys, dan webhooks. Event keamanan kritis seperti `role.changed` dan `member.added` melompati pengaturan preferensi ini (*security override*) untuk menjamin auditabilitas.
+- **Pendeteksi Kedaluwarsa Terjadwal (Cron Job)**: Mendaftarkan cron job harian (`system-tasks`) di BullMQ untuk memindai secrets dan API keys yang kedaluwarsa dalam 7 hari, mengirimkan notifikasi kepada admin proyek/organisasi terkait, dan memperbarui properti `expiryNotified: true` untuk mencegah duplikasi notifikasi.
+- **Pengujian Terotomatisasi (Vitest Suite)**: Membuat berkas tes integrasi baru `apps/api/src/features/notifications/__tests__/notifications.test.ts` (13 tes) untuk memvalidasi default preferensi user baru, fungsionalitas email queue/socket stream, pembacaan, dan scheduler expiration check. Seluruh tes monorepo (143 tes) berhasil lulus cleanly.
+
 ---
 
 ## Langkah Menjalankan Secara Lokal
