@@ -16,6 +16,8 @@ import { MongooseDeploymentsRepository, DeploymentsService, DeploymentsControlle
 import { MongooseAuditLogsRepository, AuditLogsService, AuditLogsController, initAuditLogsRoutes } from './features/audit-logs';
 import { MongooseWebhooksRepository, WebhooksService, WebhookPublisher, WebhooksController, initWebhooksRoutes } from './features/webhooks';
 import { MongooseSsoRepository, SsoService, SsoController, initSsoRoutes } from './features/sso';
+import { AnalyticsService, AnalyticsController, initAnalyticsRoutes } from './features/analytics';
+
 
 
 export function createApp(): express.Application {
@@ -103,6 +105,10 @@ export function createApp(): express.Application {
   const ssoController = new SsoController(ssoService);
   const ssoRoutes = initSsoRoutes(ssoController);
 
+  const analyticsService = new AnalyticsService();
+  const analyticsController = new AnalyticsController(analyticsService);
+  const analyticsRoutes = initAnalyticsRoutes(analyticsController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
@@ -113,6 +119,8 @@ export function createApp(): express.Application {
   app.use('/api/v1', auditLogsRoutes);
   app.use('/api/v1', webhooksRoutes);
   app.use('/api/v1', ssoRoutes);
+  app.use('/api/v1', analyticsRoutes);
+
 
 
   // Health check routes
@@ -143,8 +151,32 @@ export function createApp(): express.Application {
     });
   });
 
+  // Dynamic GraphQL Middleware delegate
+  app.use('/graphql', (req, res, next) => {
+    const handler = (app as any).graphqlHandler;
+    if (handler) {
+      handler(req, res, next);
+    } else {
+      next();
+    }
+  });
+
   // Catch 404
   app.use(notFoundHandler);
+
+  // Attach services to app instance for GraphQL / external access
+  (app as any).services = {
+    authService,
+    orgService,
+    projectsService,
+    secretsService,
+    apiKeysService,
+    deploymentsService,
+    auditLogsService,
+    webhooksService,
+    ssoService,
+    analyticsService
+  };
 
   // Global Error Handler
   app.use(globalErrorHandler);

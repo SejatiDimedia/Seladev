@@ -16,6 +16,7 @@
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
     "moduleResolution": "bundler",
+    "module": "ESNext",
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

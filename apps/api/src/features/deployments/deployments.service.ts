@@ -11,6 +11,7 @@ import type { DeploymentDocument } from '../../infrastructure/database/models/de
 import type { DeploymentStatus, StatusEvent } from '@seladev/types';
 import type { DeploymentFilters } from './deployments.types';
 import type { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { pubsub, DEPLOYMENT_STATUS_CHANGED } from '../graphql/graphql.pubsub';
 
 function matchBranch(branch: string, pattern: string): boolean {
   // Simple glob pattern matcher (* matches everything, feature/* matches feature/anything)
@@ -103,6 +104,8 @@ export class DeploymentsService {
       triggeredBy: user.id,
       triggeredVia: 'ui', // Triggered via UI in this flow
     });
+
+    pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: deployment });
 
     // 5. If no approval needed, add job to BullMQ queue
     if (!requiresApproval) {
@@ -206,6 +209,8 @@ export class DeploymentsService {
       throw new NotFoundError('Deployment', deploymentId);
     }
 
+    pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: updated });
+
     // Add to BullMQ
     const queue = getDeploymentsQueue();
     await queue.add(
@@ -304,6 +309,8 @@ export class DeploymentsService {
     if (!updated) {
       throw new NotFoundError('Deployment', deploymentId);
     }
+
+    pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: updated });
 
     if (this.auditLogsService) {
       this.auditLogsService.record({
@@ -406,6 +413,8 @@ export class DeploymentsService {
       if (!updated) {
         throw new NotFoundError('Deployment', deploymentId);
       }
+
+      pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: updated });
 
       if (this.webhookPublisher) {
         this.webhookPublisher.publish('deployment.cancelled', updated.organizationId.toString(), resolvedProjectId, {
@@ -529,6 +538,8 @@ export class DeploymentsService {
       triggeredBy: user.id,
       triggeredVia: 'api', // triggered via API/CLI
     });
+
+    pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: promotedDeployment });
 
     // 5. If no approval needed, add job to BullMQ queue
     if (!requiresApproval) {

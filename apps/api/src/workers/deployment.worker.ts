@@ -6,6 +6,7 @@ import { getRedisClient } from '../config/redis';
 import type { DeploymentStatus, StatusEvent } from '@seladev/types';
 import { MongooseAuditLogsRepository } from '../features/audit-logs/audit-logs.repository';
 import { MongooseOrganizationsRepository } from '../features/organizations/organizations.repository';
+import { pubsub, DEPLOYMENT_STATUS_CHANGED, DEPLOYMENT_LOG_ADDED } from '../features/graphql/graphql.pubsub';
 import { AuditLogsService } from '../features/audit-logs/audit-logs.service';
 import { MongooseWebhooksRepository } from '../features/webhooks/webhooks.repository';
 import { WebhookPublisher } from '../features/webhooks/webhook.publisher';
@@ -89,7 +90,11 @@ async function transitionStatus(
     update.$set.errorMessage = errorMessage;
   }
 
-  return DeploymentModel.findByIdAndUpdate(deploymentId, update, { new: true }).exec();
+  const updated = await DeploymentModel.findByIdAndUpdate(deploymentId, update, { new: true }).exec();
+  if (updated) {
+    pubsub.publish(DEPLOYMENT_STATUS_CHANGED, { deploymentStatusChanged: updated });
+  }
+  return updated;
 }
 
 const BUILD_LOG_TEMPLATES = [
@@ -171,6 +176,7 @@ export async function processDeployment(job: Job): Promise<void> {
       }).exec();
 
       emitSocketEvent(orgId, 'deployment:log', { deploymentId, line: logLine });
+      pubsub.publish(DEPLOYMENT_LOG_ADDED, { deploymentId, logLine });
       await sleep(logDelay);
     }
 

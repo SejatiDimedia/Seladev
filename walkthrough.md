@@ -259,7 +259,48 @@ Kami merancang dan mengimplementasikan modul baru untuk integrasi alur kerja CI/
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat integration tests di `apps/api/src/features/secrets/__tests__/secrets-bulk.test.ts` (6 tes) dan `apps/api/src/features/deployments/__tests__/deployments-promotion.test.ts` (6 tes) untuk menjamin kualitas fitur bulk reveal dan promosi deployment. Seluruh tes monorepo (104 tes) berhasil lulus dengan bersih.
 
+### 5.10 GraphQL Endpoint (Phase 3.2)
+Kami merancang dan mengimplementasikan endpoint GraphQL terpadu yang mematuhi batasan keamanan tinggi dan mendukung pembaruan real-time:
+- **Apollo Server & WebSocket Integration**:
+  - Mengintegrasikan Apollo Server v5 menggunakan adapter `@as-integrations/express4` pada rute `/graphql`.
+  - Mengonfigurasi server WebSocket `graphql-ws` yang berbagi port HTTP yang sama untuk mendukung GraphQL subscriptions.
+  - Alur otentikasi (JWT / API Key) dan otorisasi RBAC divalidasi pada tingkat GraphQL Context Builder, mengisolasi data multi-tenant secara aman.
+- **Skema SDL Komprehensif (`graphql.schema.ts`)**:
+  - Menyediakan tipe data lengkap untuk `Project`, `Environment`, `Secret`, `User`, `ProjectMember`, `Deployment`, dan `AuditLog`.
+  - Mendefinisikan kueri relasional, mutasi (seperti pembuatan project/secret, trigger/cancel/approve/reject deployment), dan subscription real-time.
+- **Optimasi N+1 Query dengan DataLoader (`graphql.dataloaders.ts`)**:
+  - Mengimplementasikan batching database untuk entitas `Project`, `Environment`, dan `User` menggunakan pustaka `dataloader`.
+  - Menghindari masalah kinerja N+1 query dengan menggabungkan kueri baca ke MongoDB dalam satu ticks event loop.
+- **Subscriptions Real-time untuk Status & Logs**:
+  - `deploymentStatusChanged`: Mengalirkan status deployment terbaru ke klien.
+  - `deploymentLogAdded`: Melakukan streaming build logs baris-per-baris secara asinkron.
+  - Menggunakan modul filter `withFilter` untuk membatasi pengiriman log hanya pada deployment yang relevan bagi klien.
+- **Aturan Keamanan & Kontrol Introspeksi (`graphql.security.ts`)**:
+  - Menerapkan pembatasan kedalaman query (*Query Depth Limiting*) maksimal 5 tingkat menggunakan ASTVisitor kustom untuk mencegah serangan DoS (Denial of Service).
+  - Menonaktifkan introspeksi skema di lingkungan produksi (`production`) untuk menjaga privasi API.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 11 skenario pengujian komprehensif di `apps/api/src/features/graphql/__tests__/graphql.test.ts` untuk memvalidasi query, mutasi, otentikasi JWT/API Key, depth limits, introspeksi, dan subscriptions. Seluruh pengujian (115 tes passed di seluruh monorepo) berhasil lulus 100%.
+
+### 5.11 Analytics Dashboard (Phase 3.3)
+Kami merancang dan mengimplementasikan modul Analytics terpadu untuk melacak dan memvisualisasikan data operasional platform:
+- **Penyediaan Empat Endpoint Analitik Baru**:
+  - `GET /projects/:projectId/analytics/deployments`: Menyediakan data time-series deployments per periodik (day, week, month) beserta perhitungan success rate kumulatif.
+  - `GET /projects/:projectId/analytics/api-keys`: Menyediakan statistik frekuensi penggunaan kunci API per hari yang dihimpun dari audit logs.
+  - `GET /projects/:projectId/analytics/secrets`: Menyediakan detail frekuensi pengungkapan (*reveal*) data rahasia per key.
+  - `GET /projects/:projectId/analytics/webhooks`: Menyediakan performa total pengiriman, keberhasilan, dan rasio sukses pengiriman webhook.
+- **Pencatatan Asinkron Aktivitas API Key**:
+  - Menambahkan trigger audit log `apiKey.used` di tingkat middleware `authenticateJwt` secara asinkron untuk mencatat setiap kali API Key aktif berhasil digunakan tanpa menambah latensi request.
+- **Optimalisasi Agregasi MongoDB**:
+  - Semua kalkulasi data tren dikalkulasi langsung di memori database menggunakan MongoDB aggregation pipeline dengan filter index yang efisien.
+  - Menerapkan penanganan kondisi pembagian dengan nol menggunakan `$cond` untuk menjamin ketahanan perhitungan success rate.
+- **Proteksi Otorisasi RBAC Ketat**:
+  - Membatasi akses seluruh rute analitik hanya untuk admin organisasi (`org:owner`/`org:admin`) dan admin proyek (`project:admin`). User dengan role `developer` atau `viewer` akan diblokir langsung dengan status `403 Forbidden` (`FR-ANA-06`).
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 7 skenario pengujian unit komprehensif di `apps/api/src/features/analytics/__tests__/analytics.test.ts` untuk memverifikasi logika pipa agregasi, penanganan pembagian nol, dan mapping data nama webhook. Seluruh pengujian (122 tes passed di seluruh monorepo) berhasil lulus 100%.
+
 ---
+
+
 
 ## Langkah Menjalankan Secara Lokal
 1. Pastikan Docker Engine / Docker Desktop Anda aktif.

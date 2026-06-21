@@ -65,6 +65,140 @@ function checkApiKeyScope(method: string, path: string, scopes: string[]): boole
   return true;
 }
 
+export async function authenticateToken(token: string, method?: string, path?: string): Promise<any> {
+  // 1. Check if token is an API Key
+  if (token.startsWith('sdv_sk_')) {
+    const keyHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // Dynamically resolve ApiKey model to avoid circular import dependency
+    const ApiKey = mongoose.model('ApiKey');
+    const apiKey = await ApiKey.findOne({ keyHash }).exec();
+
+    if (!apiKey) {
+      throw new UnauthorizedError('Invalid API key', 'API_KEY_INVALID');
+    }
+    if (!apiKey.isActive) {
+      throw new UnauthorizedError('API key is deactivated', 'API_KEY_INVALID');
+    }
+    if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
+      throw new UnauthorizedError('API key has expired', 'API_KEY_INVALID');
+    }
+
+    // Fire-and-forget lastUsedAt update
+    apiKey.lastUsedAt = new Date();
+    apiKey.save().catch((err: any) => console.error('Failed to update API key lastUsedAt:', err));
+
+    // Record API Key usage in audit logs asynchronously
+    try {
+      let resolvedProjectId: string | null = null;
+      if (path) {
+        const projectIdMatch = path.match(/\/projects\/([0-9a-fA-F]{24})/);
+        if (projectIdMatch && projectIdMatch[1]) {
+          resolvedProjectId = projectIdMatch[1];
+        }
+      }
+      if (!resolvedProjectId && apiKey.projectId) {
+        resolvedProjectId = apiKey.projectId.toString();
+      }
+
+      const AuditLog = mongoose.model('AuditLog');
+      AuditLog.create({
+        organizationId: apiKey.organizationId,
+        projectId: resolvedProjectId ? new mongoose.Types.ObjectId(resolvedProjectId) : null,
+        actor: {
+          userId: apiKey.userId,
+          email: 'api-key-system',
+          ipAddress: null,
+          userAgent: null,
+        },
+        action: 'apiKey.used',
+        resource: {
+          type: 'apiKey',
+          id: apiKey._id.toString(),
+          name: apiKey.name,
+        },
+        outcome: 'success',
+        metadata: {
+          keyPrefix: apiKey.keyPrefix,
+          path: path || null,
+          method: method || null,
+        },
+      }).catch(() => {
+        // Silently catch database errors to prevent API key authentication crash
+      });
+    } catch (_err) {
+      // Silently catch resolver errors
+    }
+
+    // Resolve the owner's role in the organization
+    const Membership = mongoose.model('Membership');
+    const membership = await Membership.findOne({
+      organizationId: apiKey.organizationId,
+      userId: apiKey.userId,
+    }).exec();
+
+    const userOrgRole = membership ? membership.role : 'none';
+
+    const userPayload = {
+      id: apiKey.userId.toString(),
+      role: userOrgRole,
+      orgId: apiKey.organizationId.toString(),
+      apiKeyId: apiKey._id.toString(),
+      apiKeyScopes: apiKey.scopes,
+      apiKeyProjectId: apiKey.projectId ? apiKey.projectId.toString() : null,
+      apiKeyEnvironmentId: apiKey.environmentId ? apiKey.environmentId.toString() : null,
+    };
+
+    // Enforce API Key scope boundaries if method and path are provided
+    if (method && path) {
+      const isAllowed = checkApiKeyScope(method, path, apiKey.scopes);
+      if (!isAllowed) {
+        throw new ForbiddenError('API key missing required scope for this action');
+      }
+
+      // Enforce Project scoping boundary if projectId is present in request context
+      if (apiKey.projectId) {
+        const projectIdMatch = path.match(/\/projects\/([0-9a-fA-F]{24})/);
+        if (projectIdMatch && projectIdMatch[1] !== apiKey.projectId.toString()) {
+          throw new ForbiddenError('API key is scoped to a different project');
+        }
+      }
+    }
+
+    return userPayload;
+  }
+
+  // 2. Standard JWT Authentication flow
+  try {
+    const payload = verifyAccessToken(token);
+
+    // Check Redis blocklist for revoked access tokens
+    try {
+      const redis = getRedisClient();
+      const isBlocked = await redis.get(`token:blocklist:${payload.jti}`);
+      if (isBlocked) {
+        throw new UnauthorizedError('Session has been revoked', 'TOKEN_INVALID');
+      }
+    } catch (redisError) {
+      console.warn('⚠️ Redis blocklist unreachable:', redisError);
+    }
+
+    return {
+      id: payload.sub,
+      email: payload.email,
+      orgId: payload.orgId,
+      role: payload.role,
+      jti: payload.jti,
+    };
+  } catch (error: any) {
+    if (error.name === 'TokenExpiredError') {
+      throw new UnauthorizedError('Token has expired', 'TOKEN_EXPIRED');
+    } else {
+      throw new UnauthorizedError('Invalid authentication token', 'TOKEN_INVALID');
+    }
+  }
+}
+
 export const authenticateJwt: RequestHandler = async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers.authorization;
 
@@ -79,111 +213,19 @@ export const authenticateJwt: RequestHandler = async (req: Request, _res: Respon
     return;
   }
 
-  // 1. Check if token is an API Key
-  if (token.startsWith('sdv_sk_')) {
-    try {
-      const keyHash = crypto.createHash('sha256').update(token).digest('hex');
-
-      // Dynamically resolve ApiKey model to avoid circular import dependency
-      const ApiKey = mongoose.model('ApiKey');
-      const apiKey = await ApiKey.findOne({ keyHash }).exec();
-
-      if (!apiKey) {
-        next(new UnauthorizedError('Invalid API key', 'API_KEY_INVALID'));
-        return;
-      }
-      if (!apiKey.isActive) {
-        next(new UnauthorizedError('API key is deactivated', 'API_KEY_INVALID'));
-        return;
-      }
-      if (apiKey.expiresAt && apiKey.expiresAt < new Date()) {
-        next(new UnauthorizedError('API key has expired', 'API_KEY_INVALID'));
-        return;
-      }
-
-      // Fire-and-forget lastUsedAt update
-      apiKey.lastUsedAt = new Date();
-      apiKey.save().catch((err: any) => console.error('Failed to update API key lastUsedAt:', err));
-
-      // Resolve the owner's role in the organization
-      const Membership = mongoose.model('Membership');
-      const membership = await Membership.findOne({
-        organizationId: apiKey.organizationId,
-        userId: apiKey.userId,
-      }).exec();
-
-      const userOrgRole = membership ? membership.role : 'none';
-
-      // Attach API key context payload
-      (req as any).user = {
-        id: apiKey.userId.toString(),
-        role: userOrgRole,
-        orgId: apiKey.organizationId.toString(),
-        apiKeyId: apiKey._id.toString(),
-        apiKeyScopes: apiKey.scopes,
-        apiKeyProjectId: apiKey.projectId ? apiKey.projectId.toString() : null,
-        apiKeyEnvironmentId: apiKey.environmentId ? apiKey.environmentId.toString() : null,
-      };
-
-      // Enforce API Key scope boundaries
-      const isAllowed = checkApiKeyScope(req.method, req.path, apiKey.scopes);
-      if (!isAllowed) {
-        next(new ForbiddenError('API key missing required scope for this action'));
-        return;
-      }
-
-      // Enforce Project scoping boundary if projectId is present in request context
-      if (apiKey.projectId) {
-        const projectIdMatch = req.originalUrl.match(/\/projects\/([0-9a-fA-F]{24})/);
-        const projectIdParam = projectIdMatch ? projectIdMatch[1] : req.params.projectId;
-        if (projectIdParam && projectIdParam !== apiKey.projectId.toString()) {
-          next(new ForbiddenError('API key is scoped to a different project'));
-          return;
-        }
-      }
-
-      next();
-      return;
-    } catch (err) {
-      next(new UnauthorizedError('API key authentication failed', 'API_KEY_INVALID'));
-      return;
-    }
-  }
-
-  // 2. Standard JWT Authentication flow
   try {
-    const payload = verifyAccessToken(token);
-
-    // Check Redis blocklist for revoked access tokens
-    try {
-      const redis = getRedisClient();
-      const isBlocked = await redis.get(`token:blocklist:${payload.jti}`);
-      if (isBlocked) {
-        next(new UnauthorizedError('Session has been revoked', 'TOKEN_INVALID'));
-        return;
-      }
-    } catch (redisError) {
-      console.warn('⚠️ Redis blocklist unreachable:', redisError);
-    }
-
-    // Attach user payload to Express request (id mapped from sub)
-    (req as any).user = {
-      id: payload.sub,
-      email: payload.email,
-      orgId: payload.orgId,
-      role: payload.role,
-      jti: payload.jti,
-    };
+    const userPayload = await authenticateToken(token, req.method, req.originalUrl || req.path);
+    (req as any).user = userPayload;
 
     // Org-level MFA enforcement check
     const isAuthRoute = req.originalUrl.includes('/api/v1/auth');
-    if (!isAuthRoute && payload.orgId) {
+    if (!isAuthRoute && userPayload.orgId) {
       try {
         const Organization = mongoose.model('Organization');
-        const org = await Organization.findById(payload.orgId).exec();
+        const org = await Organization.findById(userPayload.orgId).exec();
         if (org && org.settings?.mfaRequired) {
           const User = mongoose.model('User');
-          const dbUser = await User.findById(payload.sub).exec();
+          const dbUser = await User.findById(userPayload.id).exec();
           if (dbUser && !dbUser.mfaEnabled) {
             const forbiddenError = new ForbiddenError('MFA setup is required by this organization');
             (forbiddenError as any).code = 'MFA_REQUIRED';
@@ -197,11 +239,8 @@ export const authenticateJwt: RequestHandler = async (req: Request, _res: Respon
     }
 
     next();
-  } catch (error: any) {
-    if (error.name === 'TokenExpiredError') {
-      next(new UnauthorizedError('Token has expired', 'TOKEN_EXPIRED'));
-    } else {
-      next(new UnauthorizedError('Invalid authentication token', 'TOKEN_INVALID'));
-    }
+  } catch (error) {
+    next(error);
   }
 };
+

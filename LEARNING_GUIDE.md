@@ -23,6 +23,8 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 16. [Modul Webhooks & Asynchronous Delivery](#16-modul-webhooks--asynchronous-delivery-phase-36)
 17. [Modul SSO (Single Sign-On): SAML 2.0 & OpenID Connect (OIDC)](#17-modul-sso-single-sign-on-saml-20--openid-connect-oidc-phase-42)
 18. [Modul Real CI/CD Integration & SELADEV CLI](#18-modul-real-cicd-integration--seladev-cli-phase-31)
+19. [Modul GraphQL Endpoint (SDL, DataLoader, & Subscriptions)](#19-modul-graphql-endpoint-sdl-dataloader--subscriptions-phase-32)
+20. [Modul Analytics Dashboard & Agregasi MongoDB](#20-modul-analytics-dashboard--agregasi-mongodb-phase-33)
 
 ---
 
@@ -717,3 +719,115 @@ CLI menyimpan data autentikasi lokal pada mesin pengembang di berkas `~/.config/
 ### D. Deployment Promotions & Git Version Cloning
 - **Mekanisme Promosi**: Dibandingkan dengan men-trigger deployment baru dari awal (yang memerlukan spesifikasi ulang branch/commit), promosi deployment (`POST /deployments/:deploymentId/promote`) menyalin deployment sukses yang sudah ada dari satu lingkungan (misalnya `development` atau `staging`) dan mempromosikannya ke lingkungan target berikutnya (misalnya `production`).
 - **Kekekalan Metadata**: Kloning menyalin data Git versi aslinya secara persis (branch, commit SHA, dan commit message). Ini menjamin bahwa kode yang lulus pengujian di staging adalah kode yang **persis sama** yang masuk ke production, meminimalisir kesalahan manusia (*human-error*).
+
+---
+
+## 19. Modul GraphQL Endpoint (SDL, DataLoader, & Subscriptions) (Phase 3.2)
+
+Modul **GraphQL Endpoint** mengintegrasikan API GraphQL di samping REST API yang sudah ada, melayani kueri data relasional secara efisien (mengatasi N+1 query problem), streaming pembaruan real-time (Subscriptions), serta mematuhi aturan keamanan ketat (Query Depth Limiting).
+
+### A. Skema GraphQL (SDL) Terpadu
+Kita mendefinisikan struktur API menggunakan schema SDL (*Schema Definition Language*) di [graphql.schema.ts](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/apps/api/src/features/graphql/graphql.schema.ts).
+- **Query**: Mengambil data `projects`, `project`, `environment`, `secrets`, `revealSecret`, `deployments`, `deployment`, dan `auditLogs`.
+- **Mutation**: Melakukan modifikasi data seperti `createProject`, `createSecret`, `triggerDeployment`, `approveDeployment`, `rejectDeployment`, dan `cancelDeployment`.
+- **Subscription**: Mendengarkan pembaruan real-time `deploymentStatusChanged` (untuk status deployment) dan `deploymentLogAdded` (untuk build logs baris-per-baris).
+- **Custom Scalar `DateTime`**: Mendukung penanganan format waktu ISO-8601 secara type-safe di GraphQL.
+
+### B. Otentikasi Terintegrasi & RBAC
+GraphQL tidak memerlukan sistem otentikasi baru. Modul ini mendeteksi JWT token RS256 maupun API Key (Base58) yang dikirimkan melalui header `Authorization: Bearer <token>` atau query param WebSocket.
+- **Context Builder**: Sebelum query dieksekusi, context builder (`graphql.server.ts`) mengekstrak token, memanggil helper otentikasi global, dan menempelkan objek `user` serta wewenang organisasi/proyek (`clientContext`) ke dalam GraphQL `Context`.
+- **Resolver-Level Security**: Setiap resolver (dalam [graphql.resolvers.ts](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/apps/api/src/features/graphql/graphql.resolvers.ts)) memeriksa izin akses menggunakan RBAC dua tingkat (org & proyek) sebelum mendelegasikan perintah ke layer Service.
+
+### C. Batching & Caching dengan DataLoader (Solusi N+1 Query)
+Saat memuat data relasional (misalnya: mengambil daftar proyek, lalu untuk setiap proyek mengambil data environment, dan untuk setiap environment mengambil data user pembuatnya), kueri database naif akan memicu satu kueri utama ditambah $N$ kueri tambahan untuk setiap relasi (N+1 query problem).
+- **DataLoader**: Kita menggunakan pustaka `dataloader` untuk menampung ID relasi yang diminta dalam satu siklus event loop (tick) dan menggabungkannya (*batching*) menjadi satu query database massal (`$in` di MongoDB).
+- **Request-Scoped Cache**: Loader dibuat baru per-request di dalam Context, memastikan cache loader tidak bocor antar pengguna yang berbeda (isolasi multi-tenant yang aman).
+- **Pola DataLoader**:
+  ```typescript
+  export const createLoaders = (services: Services) => ({
+    projectLoader: new DataLoader(async (ids: readonly string[]) => {
+      const projects = await services.projects.findManyByIds([...ids]);
+      const map = new Map(projects.map(p => [p.id.toString(), p]));
+      return ids.map(id => map.get(id) || null);
+    }),
+    // ... loaders lainnya
+  });
+  ```
+
+### D. Subscriptions over WebSockets (`graphql-ws` & PubSub)
+Untuk streaming log build dan pembaruan status deployment secara real-time:
+- **WebSocket Protocol**: Express HTTP server dimodifikasi untuk membungkus server WebSocket `graphql-ws` pada port yang sama.
+- **PubSub Engine**: Kita menginstansiasi engine `PubSub` global untuk memancarkan event ke resolver subscription.
+- **Resolver Subscriptions**:
+  ```typescript
+  deploymentLogAdded: {
+    subscribe: withFilter(
+      () => pubSub.asyncIterableIterator(PUB_SUB_EVENTS.DEPLOYMENT_LOG_ADDED),
+      (payload, variables) => payload.deploymentLogAdded.deploymentId === variables.deploymentId
+    )
+  }
+  ```
+  Fungsi `withFilter` memastikan bahwa klien hanya menerima log dari `deploymentId` yang mereka minta secara eksplisit.
+- **Event Pemicu**: Di dalam worker (`deployment.worker.ts`) and service (`deployments.service.ts`), kita memicu pemancaran event menggunakan `pubSub.publish(PUB_SUB_EVENTS.DEPLOYMENT_STATUS_CHANGED, ...)` ketika status berubah atau log build baru ditulis.
+
+### E. Proteksi Keamanan API GraphQL
+API GraphQL rentan terhadap serangan penolakan layanan (DoS) melalui query yang bersarang sangat dalam (misal: project -> environments -> project -> environments -> ...).
+- **Depth Limit Rule**: Kita menerapkan aturan validasi custom `depthLimitRule(5)` menggunakan `ASTVisitor` GraphQL. Aturan ini memindai Abstract Syntax Tree (AST) dari kueri yang masuk dan langsung menolak kueri jika kedalamannya melebihi 5 tingkat.
+- **Introspection Control**: Fitur introspeksi (kemampuan untuk melihat seluruh skema API) diaktifkan secara bawaan untuk development lokal, namun dimatikan pada lingkungan produksi (`production`) untuk menyulitkan penyerang memetakan celah API (Information Disclosure Protection).
+
+---
+
+## 20. Modul Analytics Dashboard & Agregasi MongoDB (Phase 3.3)
+
+Modul **Analytics Dashboard** menyediakan wawasan visual yang mendalam mengenai aktivitas pembangunan (*build pipelines*), data rahasia (*secrets*), integrasi eksternal (*webhooks*), dan otentikasi kunci API (*API Keys*). Modul ini memanfaatkan optimalisasi query agregasi di tingkat database untuk menyajikan data statistik yang ramah UI.
+
+### A. MongoDB Aggregation Pipeline untuk Data Laporan (*Time-Series*)
+Untuk menampilkan tren operasional (misalnya jumlah deployment sukses per hari/minggu/bulan), database MongoDB tidak boleh di-query secara mentah per baris. Kita menggunakan **Aggregation Pipeline** (pipa agregasi) untuk memproses, menyaring, memformat, dan mengelompokkan data dalam memori database sebelum dikirim ke klien:
+- **`$match`**: Menyaring data berdasarkan rentang tanggal (`startDate`/`endDate`) dan ID proyek (`projectId`) untuk meminimalkan data yang diolah.
+- **`$project` dengan `$dateToString`**: Memformat field tanggal `createdAt` menjadi string periodik yang tepat berdasarkan tingkat granularity yang diminta:
+  - Hari (`day`): `'%Y-%m-%d'` (contoh: `2026-06-21`)
+  - Minggu (`week`): `'%Y-W%V'` (contoh: `2026-W25` - standard ISO week)
+  - Bulan (`month`): `'%Y-%m'` (contoh: `2026-06`)
+- **`$group`**: Mengelompokkan dokumen berdasarkan periodik waktu ini dan menghitung metrik menggunakan operator akumulator:
+  ```javascript
+  {
+    $group: {
+      _id: '$period',
+      total: { $sum: 1 },
+      succeeded: { $sum: { $cond: [{ $eq: ['$status', 'success'] }, 1, 0] } },
+      // ...
+    }
+  }
+  ```
+
+### B. Rumus Success Rate & Penanganan Edge-Cases (Pembagian dengan Nol)
+Menghitung rasio kesuksesan operasional (baik untuk deployments maupun webhooks) di tingkat agregasi database memerlukan perlindungan ekstra dari kegagalan matematika pembagian dengan nol (*division by zero*):
+- **Rumus Dasar**:
+  $$\text{Success Rate} = \frac{\text{Succeeded}}{\text{Succeeded} + \text{Failed}} \times 100$$
+- **Penanganan Kondisi `$cond`**: Jika tidak ada data yang masuk (`total === 0` atau `succeeded + failed === 0`), database akan melemparkan kesalahan matematika fatal jika kita membagi langsung. Di MongoDB, kita menyelesaikannya dengan operator `$cond`:
+  ```javascript
+  successRate: {
+    $cond: [
+      { $gt: ['$total', 0] },
+      { $multiply: [{ $divide: ['$succeeded', '$total'] }, 100] },
+      0 // Kembalikan 0 jika total adalah 0
+    ]
+  }
+  ```
+  This is safe and avoids any division by zero errors.
+
+### C. Analitik API Keys Menggunakan Audit Logs
+API Keys digunakan secara dinamis oleh mesin otomatis. Karena kita tidak ingin membebani database dengan menyimpan riwayat akses di tabel khusus yang sangat berat, kita menggunakan data yang sudah tercatat di sistem audit log:
+1. **Pencatatan Asinkron (`apiKey.used`)**: Setiap kali kunci API digunakan di middleware autentikasi, entri audit log baru dibuat secara *fire-and-forget* (tidak menahan proses HTTP).
+2. **Ekstraksi & Agregasi**: Saat memanggil endpoint analitik API Keys, server melakukan pencocokan data audit logs dengan `action: 'apiKey.used'`. Kita mengelompokkannya berdasarkan ID kunci API (`resource.id`) dan periodik hari (`'%Y-%m-%d'`) untuk menghasilkan diagram batang visual yang menampilkan frekuensi aktivitas key.
+
+### D. Kontrol Akses RBAC Dua Tingkat pada Endpoint Analitik
+Informasi analitik (terutama menyangkut audit reveal secrets dan statistik kegagalan build) adalah data internal rahasia yang sensitif.
+- **Batasan Izin**: Hanya pengguna dengan peran organisasi admin/owner (`org:owner`/`org:admin`) atau administrator proyek (`project:admin`) yang boleh mengakses modul ini. Pengembang biasa (`project:developer`) dan pemantau (`project:viewer`) secara bawaan tidak diizinkan.
+- **Enforcement via Middleware**: Aturan ini ditegakkan di tingkat perutean Express menggunakan middleware dinamis:
+  ```typescript
+  router.get('/projects/:projectId/analytics/...', authenticateJwt, authorizeRbac({ requiredProjectRole: 'admin' }), ...);
+  ```
+  Hal ini mengunci akses data dengan aman di lapisan terluar API.
+
+
