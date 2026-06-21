@@ -90,4 +90,14 @@ export class OrganizationsController {
 
     res.status(204).end();
   });
+
+  getUserOrgs = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const userId = (req as any).user.id;
+    const orgs = await this.orgService.getUserOrgs(userId);
+
+    res.status(200).json({
+      success: true,
+      data: orgs,
+    });
+  });
 }

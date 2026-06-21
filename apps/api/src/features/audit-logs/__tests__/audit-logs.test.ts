@@ -115,6 +115,65 @@ class InMemoryAuditLogsRepository implements AuditLogsRepository {
       nextCursor,
     };
   }
+
+  async findManyCrossWorkspace(
+    limit: number,
+    cursor?: string | null,
+    filters?: any
+  ): Promise<{ logs: any[]; hasNext: boolean; nextCursor: string | null }> {
+    let filtered = [...this.logs];
+
+    if (filters) {
+      if (filters.action) {
+        filtered = filtered.filter((l) => l.action === filters.action);
+      }
+      if (filters.actorId) {
+        filtered = filtered.filter((l) => l.actor.userId === filters.actorId);
+      }
+      if (filters.resourceType) {
+        filtered = filtered.filter((l) => l.resource.type === filters.resourceType);
+      }
+    }
+
+    filtered.sort((a, b) => {
+      const timeDiff = b.createdAt.getTime() - a.createdAt.getTime();
+      if (timeDiff !== 0) return timeDiff;
+      return b.id.localeCompare(a.id);
+    });
+
+    let startIndex = 0;
+    if (cursor) {
+      const decoded = Buffer.from(cursor, 'base64').toString('ascii');
+      const [cursorTime, cursorId] = decoded.split('_');
+      if (cursorTime && cursorId) {
+        const timeVal = parseInt(cursorTime, 10);
+        startIndex = filtered.findIndex(
+          (l) => l.createdAt.getTime() === timeVal && l.id === cursorId
+        );
+        if (startIndex !== -1) {
+          startIndex += 1;
+        } else {
+          startIndex = 0;
+        }
+      }
+    }
+
+    const sliced = filtered.slice(startIndex, startIndex + limit);
+    const hasNext = filtered.length > startIndex + limit;
+
+    let nextCursor: string | null = null;
+    if (hasNext && sliced.length > 0) {
+      const last = sliced[sliced.length - 1];
+      const cursorStr = `${last.createdAt.getTime()}_${last.id}`;
+      nextCursor = Buffer.from(cursorStr).toString('base64');
+    }
+
+    return {
+      logs: sliced,
+      hasNext,
+      nextCursor,
+    };
+  }
 }
 
 class InMemoryOrganizationsRepository implements Partial<OrganizationsRepository> {

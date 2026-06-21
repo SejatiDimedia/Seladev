@@ -172,4 +172,17 @@ export class OrganizationsService {
     const memberships = await this.orgRepo.findMembershipsByOrg(orgId);
     return memberships.map(m => m.toJSON() as unknown as Membership);
   }
+
+  async getUserOrgs(userId: string): Promise<Organization[]> {
+    const memberships = await this.orgRepo.findMembershipsByUser(userId);
+    return memberships
+      .map(m => m.organizationId)
+      .filter((org): org is any => org !== null)
+      .map(org => {
+        if (typeof org.toJSON === 'function') {
+          return org.toJSON() as unknown as Organization;
+        }
+        return org as unknown as Organization;
+      });
+  }
 }

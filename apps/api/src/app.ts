@@ -5,6 +5,7 @@ import cookieParser from 'cookie-parser';
 import { notFoundHandler } from './middleware/not-found';
 import { globalErrorHandler } from './middleware/error-handler';
 import { config } from './config';
+import { authenticateJwt } from './middleware/authenticate-jwt';
 
 // Features Imports
 import { MongooseAuthRepository, AuthService, AuthController, initAuthRoutes } from './features/auth';
@@ -112,6 +113,7 @@ export function createApp(): express.Application {
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
+  app.get('/api/v1/me/organizations', authenticateJwt, orgController.getUserOrgs);
   app.use('/api/v1', projectsRoutes);
   app.use('/api/v1', secretsRoutes);
   app.use('/api/v1', apiKeysRoutes);

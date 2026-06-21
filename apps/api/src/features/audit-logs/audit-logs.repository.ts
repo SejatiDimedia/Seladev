@@ -29,6 +29,12 @@ export interface AuditLogsRepository {
     cursor?: string | null,
     filters?: AuditLogFilters
   ): Promise<{ logs: AuditLogDocument[]; hasNext: boolean; nextCursor: string | null }>;
+
+  findManyCrossWorkspace(
+    limit: number,
+    cursor?: string | null,
+    filters?: AuditLogFilters
+  ): Promise<{ logs: AuditLogDocument[]; hasNext: boolean; nextCursor: string | null }>;
 }
 
 export class MongooseAuditLogsRepository implements AuditLogsRepository {
@@ -131,6 +137,88 @@ export class MongooseAuditLogsRepository implements AuditLogsRepository {
     }
 
     // Fetch limit + 1 to determine hasNext page
+    const logs = await AuditLogModel.find(query)
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasNext = logs.length > limit;
+    const slicedLogs = hasNext ? logs.slice(0, limit) : logs;
+
+    let nextCursor: string | null = null;
+    if (hasNext && slicedLogs.length > 0) {
+      const lastDoc = slicedLogs[slicedLogs.length - 1]!;
+      nextCursor = Buffer.from(
+        JSON.stringify({
+          id: lastDoc._id.toString(),
+          ts: lastDoc.createdAt.toISOString(),
+        })
+      ).toString('base64');
+    }
+
+    return {
+      logs: slicedLogs,
+      hasNext,
+      nextCursor,
+    };
+  }
+
+  async findManyCrossWorkspace(
+    limit: number,
+    cursor?: string | null,
+    filters?: AuditLogFilters
+  ): Promise<{ logs: AuditLogDocument[]; hasNext: boolean; nextCursor: string | null }> {
+    const query: any = {};
+
+    if (filters) {
+      if (filters.actorId) {
+        query['actor.userId'] = new mongoose.Types.ObjectId(filters.actorId);
+      }
+      if (filters.actorEmail) {
+        query['actor.email'] = { $regex: new RegExp(filters.actorEmail, 'i') };
+      }
+      if (filters.action) {
+        if (Array.isArray(filters.action)) {
+          query.action = { $in: filters.action };
+        } else {
+          query.action = filters.action;
+        }
+      }
+      if (filters.resourceType) {
+        query['resource.type'] = filters.resourceType;
+      }
+      if (filters.resourceId) {
+        query['resource.id'] = filters.resourceId;
+      }
+      if (filters.outcome) {
+        query.outcome = filters.outcome;
+      }
+      if (filters.startDate || filters.endDate) {
+        query.createdAt = {};
+        if (filters.startDate) {
+          query.createdAt.$gte = new Date(filters.startDate);
+        }
+        if (filters.endDate) {
+          query.createdAt.$lte = new Date(filters.endDate);
+        }
+      }
+    }
+
+    if (cursor) {
+      try {
+        const decoded = JSON.parse(Buffer.from(cursor, 'base64').toString('utf8'));
+        const { id, ts } = decoded;
+        if (id && ts) {
+          query.$or = [
+            { createdAt: { $lt: new Date(ts) } },
+            { createdAt: new Date(ts), _id: { $lt: new mongoose.Types.ObjectId(id) } },
+          ];
+        }
+      } catch (err) {
+        // Fallback
+      }
+    }
+
     const logs = await AuditLogModel.find(query)
       .sort({ createdAt: -1, _id: -1 })
       .limit(limit + 1)

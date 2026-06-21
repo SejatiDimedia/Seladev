@@ -51,6 +51,10 @@ const UserSchema = new Schema<UserDocument>(
       type: Boolean,
       default: false,
     },
+    isPlatformAdmin: {
+      type: Boolean,
+      default: false,
+    },
     mfaSecret: {
       type: String,
       default: null,

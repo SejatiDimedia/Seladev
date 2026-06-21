@@ -6,6 +6,7 @@ export interface User {
   avatarUrl: string | null;
   isActive: boolean;
   mfaEnabled: boolean;
+  isPlatformAdmin?: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   updatedAt: string;

@@ -33,6 +33,7 @@ export interface JwtPayload {
   role: string;        // org-level role
   type: 'access';      // token type
   jti: string;         // JWT ID for blocklisting
+  isPlatformAdmin?: boolean; // platform admin flag
 }
 
 export interface MfaPendingPayload {
@@ -43,7 +44,7 @@ export interface MfaPendingPayload {
 /**
  * Signs an RS256 JWT using the private RSA key.
  */
-export function signAccessToken(payload: Omit<JwtPayload, 'type' | 'jti'> & { jti?: string }): string {
+export function signAccessToken(payload: Omit<JwtPayload, 'type' | 'jti' | 'isPlatformAdmin'> & { jti?: string; isPlatformAdmin?: boolean }): string {
   const tokenPayload: JwtPayload = {
     ...payload,
     type: 'access',

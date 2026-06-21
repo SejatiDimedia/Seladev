@@ -95,4 +95,17 @@ export class AuditLogsService {
     // 4. Fetch from repository
     return this.auditLogsRepo.findMany(org.id, limit, cursor, filters);
   }
+
+  async listCrossWorkspaceHistory(
+    user: { id: string; role: string; orgId: string; isPlatformAdmin?: boolean },
+    limit: number,
+    cursor?: string | null,
+    filters?: AuditLogFilters
+  ): Promise<{ logs: any[]; hasNext: boolean; nextCursor: string | null }> {
+    if (!user.isPlatformAdmin) {
+      throw new ForbiddenError('Access denied: only platform administrators can access cross-workspace audit logs');
+    }
+
+    return this.auditLogsRepo.findManyCrossWorkspace(limit, cursor, filters);
+  }
 }

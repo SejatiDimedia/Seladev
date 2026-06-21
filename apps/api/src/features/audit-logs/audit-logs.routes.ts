@@ -13,5 +13,11 @@ export function initAuditLogsRoutes(auditLogsController: AuditLogsController): R
     auditLogsController.listHistory
   );
 
+  router.get(
+    '/audit-logs',
+    authenticateJwt,
+    auditLogsController.listCrossWorkspaceHistory
+  );
+
   return router;
 }

@@ -11,6 +11,7 @@ export function initAuthRoutes(authController: AuthController): Router {
   router.post('/refresh', authController.refresh);
   router.post('/logout', authController.logout);
   router.put('/password', authenticateJwt, authController.changePassword);
+  router.post('/switch-org', authenticateJwt, authController.switchOrg);
 
   // MFA Management (Requires standard auth)
   router.post('/mfa/setup', authenticateJwt, authController.setupMfa);

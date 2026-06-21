@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { asyncWrapper } from '../../lib/async-wrapper';
 import type { AuthService } from './auth.service';
-import { registerSchema, loginSchema, passwordChangeSchema, verifyMfaSchema, loginMfaSchema } from './auth.schema';
+import { registerSchema, loginSchema, passwordChangeSchema, verifyMfaSchema, loginMfaSchema, switchOrgSchema } from './auth.schema';
 import { config } from '../../config';
 import { UnauthorizedError } from '../../lib/errors';
 
@@ -168,6 +168,27 @@ export class AuthController {
     res.status(200).json({
       success: true,
       message: 'MFA has been successfully disabled.',
+    });
+  });
+
+  switchOrg = asyncWrapper(async (req: Request, res: Response): Promise<void> => {
+    const dto = switchOrgSchema.parse(req.body);
+    const userId = (req as any).user.id;
+
+    const { accessToken, refreshToken, user } = await this.authService.switchOrg(
+      userId,
+      dto.orgId,
+      this.getClientContext(req)
+    );
+
+    this.setRefreshTokenCookie(res, refreshToken);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        accessToken,
+        user,
+      },
     });
   });
 }

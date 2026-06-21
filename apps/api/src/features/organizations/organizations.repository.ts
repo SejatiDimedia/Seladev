@@ -23,6 +23,7 @@ export interface OrganizationsRepository {
   }): Promise<MembershipDocument>;
   findMembership(orgId: string, userId: string): Promise<MembershipDocument | null>;
   findMembershipsByOrg(orgId: string): Promise<MembershipDocument[]>;
+  findMembershipsByUser(userId: string): Promise<MembershipDocument[]>;
   updateMembership(id: string, update: Partial<MembershipDocument>): Promise<MembershipDocument | null>;
   deleteMembership(id: string): Promise<boolean>;
   countOrgMembers(orgId: string): Promise<number>;
@@ -77,6 +78,13 @@ export class MongooseOrganizationsRepository implements OrganizationsRepository 
     return MembershipModel.find({
       organizationId: new mongoose.Types.ObjectId(orgId),
     }).populate('userId').exec();
+  }
+
+  async findMembershipsByUser(userId: string): Promise<MembershipDocument[]> {
+    return MembershipModel.find({
+      userId: new mongoose.Types.ObjectId(userId),
+      status: 'active',
+    }).populate('organizationId').exec();
   }
 
   async updateMembership(id: string, update: Partial<MembershipDocument>): Promise<MembershipDocument | null> {

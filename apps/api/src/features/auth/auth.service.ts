@@ -3,7 +3,7 @@ import type { AuthRepository } from './auth.repository';
 import type { RegisterDto, LoginDto, PasswordChangeDto, User } from './auth.types';
 import { hashPassword, comparePassword, generateRandomToken, hashSha256, encryptGcm, decryptGcm, type EncryptedPayload } from '../../lib/crypto';
 import { signAccessToken, signMfaPendingToken, verifyMfaPendingToken } from '../../lib/jwt';
-import { ConflictError, UnauthorizedError, NotFoundError, ValidationError } from '../../lib/errors';
+import { ConflictError, UnauthorizedError, NotFoundError, ValidationError, ForbiddenError } from '../../lib/errors';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import type { AuditLogsService } from '../audit-logs/audit-logs.service';
@@ -130,6 +130,7 @@ export class AuthService {
       email: userDoc.email,
       orgId,
       role,
+      isPlatformAdmin: userDoc.isPlatformAdmin || false,
     });
 
     const rawRefreshToken = generateRandomToken();
@@ -208,6 +209,7 @@ export class AuthService {
       email: userDoc.email,
       orgId,
       role,
+      isPlatformAdmin: userDoc.isPlatformAdmin || false,
     });
 
     const expiresAt = new Date();
@@ -338,6 +340,7 @@ export class AuthService {
       email: userDoc.email,
       orgId,
       role,
+      isPlatformAdmin: userDoc.isPlatformAdmin || false,
     });
 
     const rawRefreshToken = generateRandomToken();
@@ -502,5 +505,68 @@ export class AuthService {
         outcome: 'success',
       });
     }
+  }
+
+  async switchOrg(
+    userId: string,
+    orgId: string,
+    clientContext?: { ipAddress: string | null; userAgent: string | null }
+  ): Promise<{ accessToken: string; refreshToken: string; user: any }> {
+    const userDoc = await this.authRepo.findUserById(userId);
+    if (!userDoc || !userDoc.isActive) {
+      throw new UnauthorizedError('User session invalid', 'TOKEN_INVALID');
+    }
+
+    const membership = await this.authRepo.findActiveMembership(userId, orgId);
+    if (!membership) {
+      throw new ForbiddenError('User is not an active member of this organization');
+    }
+
+    // Generate new tokens
+    const accessToken = signAccessToken({
+      sub: userDoc.id,
+      email: userDoc.email,
+      orgId: orgId,
+      role: membership.role,
+      isPlatformAdmin: userDoc.isPlatformAdmin || false,
+    });
+
+    const rawRefreshToken = generateRandomToken();
+    const refreshTokenHash = hashSha256(rawRefreshToken);
+    const family = crypto.randomUUID();
+
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7);
+
+    await this.authRepo.createRefreshToken({
+      tokenHash: refreshTokenHash,
+      userId: userDoc.id,
+      organizationId: orgId,
+      family,
+      expiresAt,
+    });
+
+    // Record audit log for switching org
+    if (this.auditLogsService) {
+      await this.auditLogsService.record({
+        organizationId: orgId,
+        action: 'auth.switch_org',
+        actor: {
+          userId: userDoc.id,
+          email: userDoc.email,
+          ipAddress: clientContext?.ipAddress || null,
+          userAgent: clientContext?.userAgent || null,
+        },
+        resource: { type: 'organization', id: orgId, name: (membership.organizationId as any).name || orgId },
+        outcome: 'success',
+        metadata: { role: membership.role },
+      }).catch(err => console.error('Failed to log audit switch_org:', err));
+    }
+
+    return {
+      accessToken,
+      refreshToken: rawRefreshToken,
+      user: userDoc.toJSON(),
+    };
   }
 }

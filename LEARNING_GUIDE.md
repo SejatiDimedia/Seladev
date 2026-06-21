@@ -831,3 +831,33 @@ Informasi analitik (terutama menyangkut audit reveal secrets dan statistik kegag
   Hal ini mengunci akses data dengan aman di lapisan terluar API.
 
 
+## 21. Modul Team Workspaces & Multi-Tenancy Dinamis (Phase 3.4)
+
+Modul **Team Workspaces** memperkenalkan dukungan keanggotaan organisasi ganda (multi-org) untuk setiap akun pengguna, portal pemindahan token (switch token), header bypass `X-Org-Id`, dan audit lintas tenant untuk Administrator Platform.
+
+### A. Dukungan Keanggotaan Multi-Org per User
+Pada arsitektur multi-tenant standard, user dan tenant sering dihubungkan dengan relasi 1:1. SELADEV mengimplementasikan hubungan multi-tenant yang dinamis (M:N) menggunakan tabel relasi perantara:
+- **`Membership`**: Menghubungkan satu `userId` dengan satu `organizationId` beserta peran (`role`) spesifik di organisasi tersebut.
+- **Relasi M:N**: Seorang pengguna dapat memiliki peran `owner` di Org A, `developer` di Org B, dan `viewer` di Org C.
+- **Isolasi Data**: Karena semua resource (Project, Environment, Secret, dll.) memiliki referensi ke `organizationId`, data tetap terisolasi secara aman di tingkat database.
+
+### B. Workspace Switcher & Rotasi Token
+Ketika pengguna ingin berganti organisasi kerja:
+1. **Request Switch**: Mengirim request `POST /api/v1/auth/switch-org { orgId }`.
+2. **Validasi Keanggotaan**: Server melakukan verifikasi instan bahwa pengguna tersebut memiliki record keanggotaan aktif (`status: 'active'`) di `orgId` target.
+3. **Penerbitan Token Baru**: Server menghasilkan access token JWT baru yang dikodekan dengan `orgId` dan peran target yang baru, serta menghasilkan refresh token baru dengan struktur token family baru untuk keamanan sesi.
+
+### C. HTTP Header Override `X-Org-Id` (Context Bypass)
+Bagi pengguna yang bekerja di berbagai organisasi (misalnya developer yang memantau build lintas proyek), berpindah sesi secara penuh menggunakan token switcher bisa memicu latensi tinggi dan beban overhead rotasi token.
+- **Override Header**: Klien dapat menyertakan header HTTP `X-Org-Id` pada request API.
+- **Middleware Interception**: Middleware `authenticateJwt` menangkap header ini:
+  - Untuk API Key, ia menolak request jika `X-Org-Id` tidak sama dengan ID organisasi asal API Key.
+  - Untuk JWT, ia memvalidasi keanggotaan pengguna di organisasi `X-Org-Id` tersebut di database. Jika valid, ia menimpa `req.user.orgId` dan `req.user.role` dengan parameter dari header tersebut secara dinamis.
+- **DX & Performa**: Hal ini memungkinkan visualisasi dashboard frontend bertukar data organisasi secara instan hanya dengan memodifikasi header request API.
+
+### D. Visibilitas Audit Lintas Workspace (Cross-Workspace Audit)
+Dalam kepatuhan tingkat Enterprise (SOC2), operator platform atau auditor memerlukan akses pengawasan penuh:
+- **`isPlatformAdmin`**: Flag boolean khusus pada `UserModel` yang menandai status administrator platform.
+- **Bypass Tenant Boundary**: Endpoint lintas workspace `GET /api/v1/audit-logs` memvalidasi status `req.user.isPlatformAdmin`. Jika benar, ia akan memanggil repositori kueri audit logs tanpa menyematkan filter batas `organizationId` tertentu, mengembalikan semua sejarah audit platform.
+
+

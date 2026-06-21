@@ -7,6 +7,7 @@ export function initOrganizationsRoutes(orgController: OrganizationsController):
   const router = Router();
 
   router.post('/', authenticateJwt, orgController.createOrg);
+  router.get('/', authenticateJwt, orgController.getUserOrgs);
   router.get('/:orgId', authenticateJwt, orgController.getOrg);
   router.get('/:orgId/members', authenticateJwt, orgController.getMembers);
   router.post('/:orgId/members', authenticateJwt, authorizeRbac({ requiredOrgRole: 'admin' }), orgController.inviteMember);

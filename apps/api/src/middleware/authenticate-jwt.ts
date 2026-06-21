@@ -189,6 +189,7 @@ export async function authenticateToken(token: string, method?: string, path?: s
       orgId: payload.orgId,
       role: payload.role,
       jti: payload.jti,
+      isPlatformAdmin: payload.isPlatformAdmin || false,
     };
   } catch (error: any) {
     if (error.name === 'TokenExpiredError') {
@@ -215,6 +216,31 @@ export const authenticateJwt: RequestHandler = async (req: Request, _res: Respon
 
   try {
     const userPayload = await authenticateToken(token, req.method, req.originalUrl || req.path);
+
+    // X-Org-Id header override logic
+    const xOrgId = req.headers['x-org-id'] || req.headers['X-Org-Id'];
+    if (xOrgId && typeof xOrgId === 'string' && mongoose.Types.ObjectId.isValid(xOrgId)) {
+      if (userPayload.apiKeyId) {
+        if (userPayload.orgId !== xOrgId) {
+          throw new ForbiddenError('API key is scoped to a different organization');
+        }
+      } else {
+        const Membership = mongoose.model('Membership');
+        const membership = await Membership.findOne({
+          organizationId: new mongoose.Types.ObjectId(xOrgId),
+          userId: new mongoose.Types.ObjectId(userPayload.id),
+          status: 'active',
+        }).exec();
+
+        if (!membership) {
+          throw new ForbiddenError('User is not a member of the specified organization');
+        }
+
+        userPayload.orgId = xOrgId;
+        userPayload.role = membership.role;
+      }
+    }
+
     (req as any).user = userPayload;
 
     // Org-level MFA enforcement check

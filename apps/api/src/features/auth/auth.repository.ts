@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import type { UserDocument } from '../../infrastructure/database/models/user.model';
 import { UserModel } from '../../infrastructure/database/models/user.model';
 import type { RefreshTokenDocument } from '../../infrastructure/database/models/refresh-token.model';
@@ -27,6 +28,7 @@ export interface AuthRepository {
   
   // Membership check
   findFirstActiveMembership(userId: string): Promise<MembershipDocument | null>;
+  findActiveMembership(userId: string, orgId: string): Promise<MembershipDocument | null>;
 
   // SSO check
   findSsoConfigByDomain(domain: string): Promise<{ organizationId: string } | null>;
@@ -69,6 +71,12 @@ export class MongooseAuthRepository implements AuthRepository {
 
   async findFirstActiveMembership(userId: string): Promise<MembershipDocument | null> {
     return MembershipModel.findOne({ userId, status: 'active' })
+      .populate('organizationId')
+      .exec();
+  }
+
+  async findActiveMembership(userId: string, orgId: string): Promise<MembershipDocument | null> {
+    return MembershipModel.findOne({ userId, organizationId: new mongoose.Types.ObjectId(orgId), status: 'active' })
       .populate('organizationId')
       .exec();
   }

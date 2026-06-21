@@ -298,9 +298,15 @@ Kami merancang dan mengimplementasikan modul Analytics terpadu untuk melacak dan
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 7 skenario pengujian unit komprehensif di `apps/api/src/features/analytics/__tests__/analytics.test.ts` untuk memverifikasi logika pipa agregasi, penanganan pembagian nol, dan mapping data nama webhook. Seluruh pengujian (122 tes passed di seluruh monorepo) berhasil lulus 100%.
 
+### 5.12 Team Workspaces (Phase 3.4)
+Kami merancang dan mengimplementasikan modul Team Workspaces untuk mendukung arsitektur multi-tenancy dinamis secara penuh:
+- **Dukungan Multi-Org per User**: Pengguna kini dapat berasosiasi dengan beberapa organisasi secara bersamaan. Profil User dan skema database (`UserModel`) diperbarui dengan properti `isPlatformAdmin` untuk kontrol hak istimewa tingkat tinggi.
+- **Peralihan Konteks (Workspace Switcher)**: Mengimplementasikan endpoint `POST /api/v1/auth/switch-org` untuk beralih konteks organisasi secara dinamis. Server memverifikasi keanggotaan aktif pengguna, kemudian menghasilkan access token JWT dan refresh token baru dengan `orgId` serta `role` organisasi baru tersebut.
+- **HTTP Header Override `X-Org-Id`**: Mendukung manipulasi konteks secara instan via header `X-Org-Id` (atau `x-org-id`). Middleware `authenticateJwt` akan secara otomatis memotong alur dan memvalidasi keanggotaan aktif untuk `orgId` di header tersebut, lalu menimpa `req.user.orgId` dan `req.user.role` untuk request yang bersangkutan.
+- **Visibilitas Audit Lintas Workspace (Platform Admin)**: Menyediakan endpoint `GET /api/v1/audit-logs` yang memungkinkan Platform Admin (`isPlatformAdmin: true`) melacak audit log seluruh tenant untuk kemudahan debugging dan investigasi kepatuhan.
+- **Pengujian Terotomatisasi (Vitest Suite)**: Membuat berkas pengujian integrasi baru `apps/api/src/features/organizations/__tests__/organizations.test.ts` (8 tes) yang mencakup verifikasi multi-org listing, context switching, X-Org-Id header overrides, dan cross-workspace audit logs visibility. Seluruh tes monorepo (130 tes) berhasil lulus cleanly.
+
 ---
-
-
 
 ## Langkah Menjalankan Secara Lokal
 1. Pastikan Docker Engine / Docker Desktop Anda aktif.

@@ -133,6 +133,7 @@ class InMemoryOrganizationsRepository implements OrganizationsRepository {
   async updateMembershipRole(_orgId: string, _userId: string, _role: string): Promise<any | null> { return null; }
   async removeMembership(_orgId: string, _userId: string): Promise<boolean> { return false; }
   async findMembershipsByOrg(_orgId: string): Promise<any[]> { return []; }
+  async findMembershipsByUser(_userId: string): Promise<any[]> { return []; }
   async updateMembership(_id: string, _update: any): Promise<any | null> { return null; }
   async deleteMembership(_id: string): Promise<boolean> { return false; }
   async countOrgMembers(_orgId: string): Promise<number> { return 0; }

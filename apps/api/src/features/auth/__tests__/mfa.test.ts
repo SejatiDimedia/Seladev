@@ -94,6 +94,11 @@ class InMemoryAuthRepository implements AuthRepository {
     return membership ? membership : null;
   }
 
+  async findActiveMembership(userId: string, orgId: string): Promise<any | null> {
+    const membership = this.memberships.find(m => m.userId === userId && m.organizationId === orgId && m.status === 'active');
+    return membership ? membership : null;
+  }
+
   async findSsoConfigByDomain(_domain: string): Promise<any | null> {
     return null;
   }

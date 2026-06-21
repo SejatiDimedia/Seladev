@@ -265,8 +265,12 @@ class InMemoryOrganizationsRepository implements OrganizationsRepository {
     return false;
   }
 
-  async countOrgMembers(_orgId: string): Promise<number> {
-    return 0;
+  async countOrgMembers(orgId: string): Promise<number> {
+    return this.memberships.filter(m => m.organizationId === orgId && m.status === 'active').length;
+  }
+
+  async findMembershipsByUser(_userId: string): Promise<any[]> {
+    return [];
   }
 
   async findUserByEmail(_email: string): Promise<any | null> {

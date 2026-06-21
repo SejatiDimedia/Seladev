@@ -38,3 +38,9 @@ export const loginMfaSchema = z.object({
 });
 export type LoginMfaDto = z.infer<typeof loginMfaSchema>;
 
+export const switchOrgSchema = z.object({
+  orgId: z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid organization ID format'),
+});
+export type SwitchOrgDto = z.infer<typeof switchOrgSchema>;
+
+
