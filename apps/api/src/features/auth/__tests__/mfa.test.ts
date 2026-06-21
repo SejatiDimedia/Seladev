@@ -93,6 +93,10 @@ class InMemoryAuthRepository implements AuthRepository {
     const membership = this.memberships.find(m => m.userId === userId && m.status === 'active');
     return membership ? membership : null;
   }
+
+  async findSsoConfigByDomain(_domain: string): Promise<any | null> {
+    return null;
+  }
 }
 
 describe('MFA / TOTP Authentication Flows', () => {

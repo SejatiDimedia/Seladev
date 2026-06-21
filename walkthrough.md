@@ -221,6 +221,21 @@ Kami merancang dan mengimplementasikan modul **Webhooks** untuk mengirimkan even
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 16 skenario tes integrasi komprehensif di `src/features/webhooks/__tests__/webhooks.test.ts` untuk memverifikasi fungsionalitas CRUD API, proteksi SSRF, worker delivery, HMAC-SHA256 signature validation, penanganan HTTP 410 Gone, auto-disable, dan grace period rotasi secret. Seluruh skenario tes berhasil lulus 100% (total **83 passed tests** di seluruh monorepo).
 
+### 5.8 SSO / SAML & OpenID Connect (OIDC) (Phase 4.2)
+Kami merancang dan mengimplementasikan fitur autentikasi terintegrasi **Single Sign-On (SSO)** menggunakan protokol **SAML 2.0** dan **OpenID Connect (OIDC)**:
+- **Enkripsi Kredensial SSO Organisasi (AES-256-GCM)**:
+  - Menyimpan konfigurasi sensitif (seperti SAML EntryPoint, SAML Cert, OIDC Client Secret, dll.) secara terenkripsi di database menggunakan algoritma AES-256-GCM. Kunci dekripsi diturunkan secara dinamis per organisasi untuk mengisolasi data masing-masing tenant.
+- **Pencarian Domain & Domain Discovery**:
+  - Endpoint `/api/v1/auth/sso/discover` mendeteksi domain email pengguna (misalnya `user@acme.com`) atau slug organisasi untuk mengarahkan pengguna secara otomatis ke alur SSO yang dikonfigurasi (SAML/OIDC).
+- **Just-In-Time (JIT) Provisioning**:
+  - Pengguna baru yang berhasil masuk via SSO tetapi belum terdaftar di platform akan dibuatkan akun pengguna baru secara otomatis dan didaftarkan sebagai anggota (`member`) dengan status aktif pada organisasi terkait.
+- **Pencegahan CSRF OIDC (Redis State Check)**:
+  - Parameter `state` untuk redirect OIDC disimpan di Redis dengan TTL 15 menit. Penukaran authorization code hanya diizinkan jika state yang dikirimkan cocok dengan state yang tersimpan di Redis, mencegah serangan CSRF.
+- **SSO Enforcement Middleware**:
+  - Jika SSO aktif untuk domain email tertentu, alur masuk dengan password tradisional akan secara otomatis diblokir (`SSO_REQUIRED` error) untuk menjaga batas keamanan perusahaan.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 9 skenario tes integrasi komprehensif di `src/features/sso/__tests__/sso.test.ts` untuk memverifikasi fungsionalitas CRUD konfigurasi, discovery domain, penanganan callback SAML/OIDC, JIT provisioning, dan enforcement login. Seluruh tes berhasil lulus 100% (total **92 passed tests** di seluruh monorepo).
+
 ---
 
 ## Langkah Menjalankan Secara Lokal

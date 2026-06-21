@@ -59,6 +59,29 @@ export class AuthService {
       }
       throw new UnauthorizedError('Invalid credentials', 'INVALID_CREDENTIALS');
     }
+    
+    // Check if user's domain is configured for SSO
+    const emailParts = userDoc.email.split('@');
+    const domain = (emailParts[1] || '').toLowerCase();
+    const ssoConfig = await this.authRepo.findSsoConfigByDomain(domain);
+    if (ssoConfig) {
+      if (this.auditLogsService) {
+        await this.auditLogsService.record({
+          organizationId: ssoConfig.organizationId,
+          action: 'auth.login_failed',
+          actor: {
+            userId: userDoc.id,
+            email: userDoc.email,
+            ipAddress: clientContext?.ipAddress || null,
+            userAgent: clientContext?.userAgent || null,
+          },
+          resource: { type: 'auth', id: userDoc.id, name: userDoc.email },
+          outcome: 'failure',
+          metadata: { reason: 'Password login disabled: SSO is required for this email domain' },
+        }).catch(err => console.error('Failed to log audit:', err));
+      }
+      throw new UnauthorizedError('Password login is disabled. Please use Single Sign-On (SSO).', 'SSO_REQUIRED');
+    }
 
     const isPasswordValid = await comparePassword(dto.password, userDoc.passwordHash);
     if (!isPasswordValid) {

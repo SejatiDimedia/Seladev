@@ -19,6 +19,9 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 12. [Modul API Keys & Autentikasi Mesin-ke-Mesin (Machine-to-Machine Auth)](#12-modul-api-keys--autentikasi-mesin-ke-mesin-machine-to-machine-auth)
 13. [Pembatasan Lingkup API Keys (Project & Environment Scoping)](#13-pembatasan-lingkup-api-keys-project--environment-scoping)
 14. [Modul Deployments, Antrean BullMQ, dan Socket.IO Real-time Logs](#14-modul-deployments-antrean-bullmq-dan-socketio-real-time-logs)
+15. [Modul Audit Logs, Kepatuhan SOC2, dan Immutability Trail](#15-modul-audit-logs-kepatuhan-soc2-dan-immutability-trail)
+16. [Modul Webhooks & Asynchronous Delivery](#16-modul-webhooks--asynchronous-delivery-phase-36)
+17. [Modul SSO (Single Sign-On): SAML 2.0 & OpenID Connect (OIDC)](#17-modul-sso-single-sign-on-saml-20--openid-connect-oidc-phase-42)
 
 ---
 
@@ -623,7 +626,7 @@ Karena log audit ditulis secara dinamis di bawah aktivitas penulisan yang padat,
 
 ---
 
-## Bab 7. Modul Webhooks (Phase 3.6)
+## 16. Modul Webhooks & Asynchronous Delivery (Phase 3.6)
 
 Modul **Webhooks** memungkinkan integrasi real-time dari event-event platform SELADEV ke server eksternal milik pengguna secara asinkron, aman, dan toleran terhadap kegagalan.
 
@@ -656,4 +659,36 @@ Untuk menjaga keamanan, kunci rahasia webhook perlu dirotasi secara berkala.
 * **Exponential Backoff**: Jika server tujuan gagal merespons atau mengembalikan error HTTP (seperti 500), BullMQ worker secara otomatis menjadwalkan ulang pengiriman hingga 5 kali percobaan dengan jeda waktu yang meningkat secara eksponensial.
 * **410 Gone**: Jika server tujuan secara eksplisit mengembalikan kode status HTTP `410 Gone`, ini menandakan endpoint tersebut sudah tidak ada secara permanen. Worker akan langsung menonaktifkan webhook secara instan tanpa mencoba ulang.
 * **Auto-Disable**: Untuk menghemat resource dari pengiriman yang sia-sia, jika webhook gagal sebanyak 100 kali berturut-turut (`failureStreak >= 100`), sistem secara otomatis mengubah status ke `isActive = false` dan mencatat waktu penonaktifan di `disabledAt`.
+
+
+---
+
+## 17. Modul SSO (Single Sign-On): SAML 2.0 & OpenID Connect (OIDC) (Phase 4.2)
+
+Modul **SSO (Single Sign-On)** memungkinkan pengguna Enterprise untuk melakukan autentikasi menggunakan Identity Provider (IdP) pihak ketiga melalui protokol standar industri SAML 2.0 dan OpenID Connect (OIDC).
+
+### A. Arsitektur Penyimpanan Kredensial Terenkripsi (AES-256-GCM)
+Konfigurasi SSO per-organisasi dapat berisi data sensitif seperti Client Secret OIDC atau kunci sertifikat SAML. Data ini tidak boleh disimpan dalam bentuk plaintext di database.
+* **Enkripsi Kunci Org-Derived**: Kita menggunakan kunci enkripsi unik per organisasi:
+  `derivedKey = HKDF/HMAC(MASTER_ENCRYPTION_KEY, organizationId)`
+* **Skema Galois/Counter Mode**: Konfigurasi sensitif dienkripsi menggunakan AES-256-GCM untuk memastikan kerahasiaan dan integritas data (menggunakan tag autentikasi 16-byte untuk deteksi kerusakan data).
+
+### B. Domain Discovery & SSO Enforcement
+1. **SSO Discovery**: Saat login, platform mendeteksi apakah domain email pengguna (misalnya `john@acme.com` -> `acme.com`) atau slug organisasi dikonfigurasi untuk SSO. Jika aktif, API mengembalikan jenis provider SSO yang harus digunakan.
+2. **Password Bypass & Enforcement**: Jika organisasi mengaktifkan SSO, alur login dengan password standar akan diblokir dengan error `SSO_REQUIRED`. Ini mencegah pengguna menerobos kebijakan keamanan terpusat organisasi mereka.
+
+### C. Alur SAML 2.0 (SP-Initiated Login)
+* **AuthNRequest**: Server bertindak sebagai Service Provider (SP). Saat inisiasi login SAML, server menghasilkan XML `AuthNRequest` menggunakan metadata IdP dan mengarahkan pengguna ke halaman Single Sign-On IdP (misalnya Okta atau Microsoft Entra ID).
+* **Assertion Parsing & Signature Verification**: Saat IdP mengirimkan kembali `SAMLResponse` via HTTP POST, server mengurai XML respon tersebut, memvalidasi tanda tangan XML menggunakan sertifikat X509 milik IdP yang terdaftar, dan mengambil atribut profil pengguna (seperti email, nama depan, dan nama belakang).
+
+### D. Alur OpenID Connect (OIDC) & CSRF Protection
+* **Redis State Tracking**: Sebelum mengarahkan pengguna ke URL otorisasi OIDC, server menghasilkan token state acak dan menyimpannya di Redis dengan TTL 15 menit. State ini disertakan dalam request otorisasi.
+* **Callback Validation**: Ketika OIDC provider (seperti Google Workspace) mengirimkan authorization code kembali ke server, server memverifikasi state yang dikirimkan dengan state yang tersimpan di Redis. Jika tidak cocok, request ditolak (perlindungan terhadap serangan Cross-Site Request Forgery / CSRF).
+* **ID Token Verification**: Server menukar code otorisasi dengan ID Token (JWT), mendekodenya, dan memverifikasi isi payload token untuk mendapatkan data profil pengguna.
+
+### E. Just-In-Time (JIT) Provisioning
+Ketika pengguna berhasil masuk melalui SSO (SAML atau OIDC):
+1. **User Auto-Creation**: Jika akun pengguna belum terdaftar di platform, sistem otomatis membuat akun baru di database dengan flag password non-aktif (`sso-only:<provider>:entropy`).
+2. **Membership Auto-Assignment**: Sistem secara otomatis membuat keanggotaan (`Membership`) pengguna baru tersebut ke dalam organisasi terkait dengan wewenang dasar `member` dan status aktif.
+
 

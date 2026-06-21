@@ -15,6 +15,7 @@ import { MongooseApiKeysRepository, ApiKeysService, ApiKeysController, initApiKe
 import { MongooseDeploymentsRepository, DeploymentsService, DeploymentsController, initDeploymentsRoutes } from './features/deployments';
 import { MongooseAuditLogsRepository, AuditLogsService, AuditLogsController, initAuditLogsRoutes } from './features/audit-logs';
 import { MongooseWebhooksRepository, WebhooksService, WebhookPublisher, WebhooksController, initWebhooksRoutes } from './features/webhooks';
+import { MongooseSsoRepository, SsoService, SsoController, initSsoRoutes } from './features/sso';
 
 
 export function createApp(): express.Application {
@@ -97,6 +98,11 @@ export function createApp(): express.Application {
   const deploymentsController = new DeploymentsController(deploymentsService, projectsService);
   const deploymentsRoutes = initDeploymentsRoutes(deploymentsController);
 
+  const ssoRepo = new MongooseSsoRepository();
+  const ssoService = new SsoService(ssoRepo, auditLogsService);
+  const ssoController = new SsoController(ssoService);
+  const ssoRoutes = initSsoRoutes(ssoController);
+
   // Mount API Features
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/v1/organizations', orgRoutes);
@@ -106,6 +112,7 @@ export function createApp(): express.Application {
   app.use('/api/v1', deploymentsRoutes);
   app.use('/api/v1', auditLogsRoutes);
   app.use('/api/v1', webhooksRoutes);
+  app.use('/api/v1', ssoRoutes);
 
 
   // Health check routes
