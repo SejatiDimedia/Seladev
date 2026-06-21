@@ -11,7 +11,10 @@ import { ConflictError, NotFoundError, ValidationError } from '../../lib/errors'
 import mongoose from 'mongoose';
 
 export class OrganizationsService {
-  constructor(private readonly orgRepo: OrganizationsRepository) {}
+  constructor(
+    private readonly orgRepo: OrganizationsRepository,
+    private readonly webhookPublisher?: any
+  ) {}
 
   async createOrg(
     userId: string,
@@ -79,6 +82,25 @@ export class OrganizationsService {
       joinedAt: new Date(),
     });
 
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('member.invited', orgId, null, {
+        invitation: {
+          inviteeEmail: dto.email,
+          orgRole: dto.role,
+          invitedBy,
+          expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+
+      this.webhookPublisher.publish('member.joined', orgId, null, {
+        member: {
+          userId: userDoc.id,
+          role: dto.role,
+          joinedAt: new Date().toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return membershipDoc.toJSON() as unknown as Membership;
   }
 
@@ -104,6 +126,15 @@ export class OrganizationsService {
     membership.role = dto.role as OrgRole;
     await membership.save();
 
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('member.role_changed', orgId, null, {
+        member: {
+          userId,
+          role: dto.role,
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return membership.toJSON() as unknown as Membership;
   }
 
@@ -127,6 +158,14 @@ export class OrganizationsService {
     // FR-ORG-04: also remove all project-level role assignments
     // For now we import model directly or handle in project members repository later.
     await mongoose.model('ProjectMember').deleteMany({ userId }).exec();
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('member.removed', orgId, null, {
+        member: {
+          userId,
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
   }
 
   async getMembers(orgId: string): Promise<Membership[]> {

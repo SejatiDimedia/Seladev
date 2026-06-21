@@ -23,7 +23,8 @@ export class DeploymentsService {
   constructor(
     private readonly deploymentsRepo: DeploymentsRepository,
     private readonly projectsRepo: ProjectsRepository,
-    private readonly auditLogsService?: AuditLogsService
+    private readonly auditLogsService?: AuditLogsService,
+    private readonly webhookPublisher?: any
   ) {}
 
   private async verifyProjectAccess(user: { id: string; role: string; orgId: string }, projectId: string) {
@@ -140,6 +141,19 @@ export class DeploymentsService {
       });
     }
 
+    if (this.webhookPublisher && !requiresApproval) {
+      this.webhookPublisher.publish('deployment.queued', project.organizationId.toString(), projectId, {
+        deployment: {
+          id: deployment.id,
+          status: 'queued',
+          environmentId: env.id,
+          triggeredBy: { userId: user.id },
+          gitRef: branch,
+          startedAt: new Date().toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return deployment;
   }
 
@@ -222,6 +236,19 @@ export class DeploymentsService {
           branch: updated.branch,
         },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('deployment.queued', updated.organizationId.toString(), projectId, {
+        deployment: {
+          id: updated.id,
+          status: 'queued',
+          environmentId: updated.environmentId.toString(),
+          triggeredBy: { userId: updated.triggeredBy.toString() },
+          gitRef: updated.branch || 'main',
+          startedAt: new Date().toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
 
     return updated;
@@ -369,6 +396,20 @@ export class DeploymentsService {
       if (!updated) {
         throw new NotFoundError('Deployment', deploymentId);
       }
+
+      if (this.webhookPublisher) {
+        this.webhookPublisher.publish('deployment.cancelled', updated.organizationId.toString(), projectId, {
+          deployment: {
+            id: updated.id,
+            status: 'cancelled',
+            environmentId: updated.environmentId.toString(),
+            triggeredBy: { userId: updated.triggeredBy.toString() },
+            gitRef: updated.branch || 'main',
+            completedAt: new Date().toISOString(),
+          }
+        }).catch((err: any) => console.error('Failed to publish webhook:', err));
+      }
+
       return updated;
     }
 

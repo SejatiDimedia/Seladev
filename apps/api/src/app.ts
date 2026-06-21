@@ -14,6 +14,7 @@ import { MongooseSecretsRepository, SecretsService, SecretsController, initSecre
 import { MongooseApiKeysRepository, ApiKeysService, ApiKeysController, initApiKeysRoutes } from './features/api-keys';
 import { MongooseDeploymentsRepository, DeploymentsService, DeploymentsController, initDeploymentsRoutes } from './features/deployments';
 import { MongooseAuditLogsRepository, AuditLogsService, AuditLogsController, initAuditLogsRoutes } from './features/audit-logs';
+import { MongooseWebhooksRepository, WebhooksService, WebhookPublisher, WebhooksController, initWebhooksRoutes } from './features/webhooks';
 
 
 export function createApp(): express.Application {
@@ -61,32 +62,38 @@ export function createApp(): express.Application {
   const auditLogsController = new AuditLogsController(auditLogsService);
   const auditLogsRoutes = initAuditLogsRoutes(auditLogsController);
 
+  const webhooksRepo = new MongooseWebhooksRepository();
+  const webhooksService = new WebhooksService(webhooksRepo, auditLogsService);
+  const webhookPublisher = new WebhookPublisher(webhooksRepo);
+  const webhooksController = new WebhooksController(webhooksService);
+  const webhooksRoutes = initWebhooksRoutes(webhooksController);
+
   const authRepo = new MongooseAuthRepository();
   const authService = new AuthService(authRepo, auditLogsService);
   const authController = new AuthController(authService);
   const authRoutes = initAuthRoutes(authController);
 
-  const orgService = new OrganizationsService(orgRepo);
+  const orgService = new OrganizationsService(orgRepo, webhookPublisher);
   const orgController = new OrganizationsController(orgService);
   const orgRoutes = initOrganizationsRoutes(orgController);
 
   const projectsRepo = new MongooseProjectsRepository();
-  const projectsService = new ProjectsService(projectsRepo, orgRepo, auditLogsService);
+  const projectsService = new ProjectsService(projectsRepo, orgRepo, auditLogsService, webhookPublisher);
   const projectsController = new ProjectsController(projectsService);
   const projectsRoutes = initProjectsRoutes(projectsController);
 
   const secretsRepo = new MongooseSecretsRepository();
-  const secretsService = new SecretsService(secretsRepo, projectsRepo, auditLogsService);
+  const secretsService = new SecretsService(secretsRepo, projectsRepo, auditLogsService, webhookPublisher);
   const secretsController = new SecretsController(secretsService, projectsService);
   const secretsRoutes = initSecretsRoutes(secretsController);
 
   const apiKeysRepo = new MongooseApiKeysRepository();
-  const apiKeysService = new ApiKeysService(apiKeysRepo, projectsRepo, orgRepo, auditLogsService);
+  const apiKeysService = new ApiKeysService(apiKeysRepo, projectsRepo, orgRepo, auditLogsService, webhookPublisher);
   const apiKeysController = new ApiKeysController(apiKeysService);
   const apiKeysRoutes = initApiKeysRoutes(apiKeysController);
 
   const deploymentsRepo = new MongooseDeploymentsRepository();
-  const deploymentsService = new DeploymentsService(deploymentsRepo, projectsRepo, auditLogsService);
+  const deploymentsService = new DeploymentsService(deploymentsRepo, projectsRepo, auditLogsService, webhookPublisher);
   const deploymentsController = new DeploymentsController(deploymentsService, projectsService);
   const deploymentsRoutes = initDeploymentsRoutes(deploymentsController);
 
@@ -98,6 +105,7 @@ export function createApp(): express.Application {
   app.use('/api/v1', apiKeysRoutes);
   app.use('/api/v1', deploymentsRoutes);
   app.use('/api/v1', auditLogsRoutes);
+  app.use('/api/v1', webhooksRoutes);
 
 
   // Health check routes

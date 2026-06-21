@@ -565,3 +565,95 @@ Membatalkan pekerjaan asinkron yang sedang berjalan di background worker memilik
      }
      ```
      Ini adalah pola desain *cancellation token* yang sangat efisien untuk proses latar belakang yang berjalan lama.
+
+---
+
+## 15. Modul Audit Logs, Kepatuhan SOC2, dan Immutability Trail
+
+Modul **Audit Logs** (Phase 3.7) dirancang khusus untuk memenuhi standar audit kepatuhan industri seperti **SOC2 Type II**. Modul ini menyediakan catatan transparan dan anti-rusak (*tamper-proof*) untuk setiap aktivitas administratif penting di platform:
+
+### A. Anatomi Dokumen Log Audit (SOC2 Compliant Schema)
+Catatan audit menyimpan informasi detail mengenai siapa, apa, kapan, dan di mana suatu tindakan dilakukan:
+* **Actor**: Identitas unik pelaku (`userId` atau `null` jika dipicu oleh sistem/API Key), alamat email (`email` - diselesaikan secara asinkron), alamat IP (`ipAddress`), dan `userAgent` dari browser/klien.
+* **Action**: Nama tindakan spesifik, dengan penamaan terstruktur berdasarkan namespace (contoh: `auth.login`, `secret.revealed`, `project.created`, `apiKey.revoked`).
+* **Resource**: Objek yang dikenakan tindakan, mencakup tipe (`type` - contoh: `secret`, `project`, `deployment`), ID unik objek (`id`), dan nama denormalisasi objek (`name` - untuk menjaga pembacaan historis jika objek asli dihapus).
+* **Metadata**: Data konteks tambahan yang relevan dengan tindakan (misalnya, masa kedaluwarsa API Key atau nomor versi rahasia yang di-rollback). Informasi sensitif seperti nilai rahasia (*secret values*) **tidak pernah** dicatat di sini.
+* **Outcome**: Hasil dari tindakan (`success` atau `failure`).
+* **Timestamps**: Waktu pencatatan log dibuat di tingkat database (`createdAt`).
+
+### B. Penegakan Imutabilitas (Immutability Enforcement)
+SOC2 mensyaratkan bahwa data log audit tidak boleh diubah (*immutable*) dan tidak dapat dimanipulasi oleh administrator internal atau penyerang database. Kita menegakkannya di dua tingkat:
+1. **Tingkat Type System & Repository**:
+   `AuditLogRepository` hanya mendefinisikan metode `create()` dan `findMany()`. Tidak ada fungsi `update`, `delete`, `replace`, atau `clear` yang dideklarasikan di dalam kelas repository.
+2. **compound database index**:
+   Indeks MongoDB ditargetkan untuk pencarian historis menurun, dan model Mongoose dikonfigurasi dengan Write Concern `majority` dan jurnalisasi (`j: true`) untuk menjamin daya tahan penulisan fisik ke penyimpanan disk.
+
+### C. Pola Pencatatan Asinkron Asli (Fire-and-Forget Pattern)
+Pencatatan aktivitas audit tidak boleh menambah waktu respons (*latency*) dari operasi utama pengguna, ataupun menghentikan alur utama jika penulisan log gagal.
+* **Non-blocking Write**: Di dalam `AuditLogsService.record()`, kita menjalankan proses penyimpanan di dalam fungsi asinkron internal yang tidak di-*await* oleh penyerah tugas utama:
+  ```typescript
+  async record(data: ...): Promise<void> {
+    const run = async () => {
+      // Selesaikan email secara asinkron dari userId jika kosong
+      let email = data.actor.email;
+      if (!email && data.actor.userId) {
+        const User = mongoose.model('User');
+        const userDoc = await User.findById(data.actor.userId).exec();
+        email = userDoc?.email;
+      }
+      // Simpan ke database
+      await this.auditLogsRepo.create({ ...data, actor: { ...data.actor, email } });
+    };
+
+    // Jalankan tanpa menghambat (fire-and-forget)
+    run().catch(err => console.error('Failed to write audit log:', err));
+  }
+  ```
+* **Resiliensi Kegagalan**: Blok `.catch` menangkap setiap kegagalan (misalnya koneksi Redis/Mongoose drop sementara) tanpa melontarkan (*throwing*) kesalahan tersebut ke atas. Operasi utama pengguna (seperti masuk atau menghapus rahasia) tetap berjalan sukses.
+
+### D. Isolasi Multi-tenant dan RBAC
+Log audit berisi data operasional yang sensitif, sehingga aksesnya dilindungi secara berlapis:
+* **Scoping Tenant**: Rute API (`GET /organizations/:orgIdOrSlug/audit-logs`) secara eksplisit memeriksa bahwa `organizationId` dari log audit yang dicari cocok dengan organisasi tempat token JWT/API Key pengguna berada.
+* **Otorisasi RBAC**: Akses ke API log audit dibatasi secara keras. Hanya pengguna dengan peran organisasi `owner` atau `admin` yang diizinkan untuk melihat log audit. Anggota biasa (`member` atau `viewer`) ditolak secara instan dengan pesan `403 Forbidden`.
+
+### E. Cursor Pagination dengan Pengurutan Ganda (Double-Sort Cursor)
+Karena log audit ditulis secara dinamis di bawah aktivitas penulisan yang padat, pagination berbasis offset (`skip` & `limit`) tidak cocok karena dapat menyebabkan catatan ganda atau terlewat (*phantom reads*).
+* **Solusi**: Kita menggunakan cursor pagination base64. Cursor didekode menjadi kombinasi `[timestamp]_[id]`.
+* **Double-Sort**: Kita mengurutkan secara ketat berdasarkan `{ createdAt: -1, _id: -1 }`. Pengurutan ganda ini menjamin bahwa jika dua log dibuat pada milidetik yang persis sama, letaknya tetap stabil berdasarkan ID dokumen yang unik.
+
+---
+
+## Bab 7. Modul Webhooks (Phase 3.6)
+
+Modul **Webhooks** memungkinkan integrasi real-time dari event-event platform SELADEV ke server eksternal milik pengguna secara asinkron, aman, dan toleran terhadap kegagalan.
+
+### A. Arsitektur Asinkron & BullMQ
+Ketika terjadi mutasi data di platform (misalnya pembuatan project, rotasi secret, status deployment berubah), SELADEV tidak mengirimkan HTTP request secara langsung di dalam thread request API utama.
+* **Mengapa?** Karena HTTP request ke server pihak ketiga bisa sangat lambat, mengalami timeout, atau tidak merespons. Melakukan ini secara sinkron akan memblokir respon API utama dan memperlambat aplikasi bagi pengguna.
+* **Solusi**: Kita menggunakan **BullMQ** (berbasis Redis) sebagai sistem antrean asinkron.
+  1. API utama memicu event dan menyimpan log pengiriman awal dengan status `pending` pada model `WebhookDelivery`.
+  2. API utama memasukkan pekerjaan pengiriman ke antrean BullMQ `webhooks` lalu langsung mengembalikan respon sukses ke pengguna.
+  3. Worker BullMQ (`webhook.worker.ts`) mengambil pekerjaan tersebut dari antrean di latar belakang dan melakukan HTTP POST request secara asinkron.
+
+### B. Proteksi SSRF (Server-Side Request Forgery) & DNS Rebinding
+Karena server SELADEV memicu request ke URL yang ditentukan oleh pengguna, ini menimbulkan celah keamanan kritis yang disebut **SSRF**, di mana penyerang bisa mendaftarkan URL yang merujuk ke layanan internal jaringan (seperti database lokal, Redis, atau Cloud Metadata API `169.254.169.254`).
+1. **Validasi URL**: Sebelum menyimpan URL webhook, sistem mengecek skema protokol harus `https:` dan melakukan DNS resolution menggunakan modul `dns` bawaan Node.js untuk memeriksa alamat IP hasil resolusi.
+2. **Filter IP Privat**: Jika alamat IP hasil resolusi berada dalam rentang IP lokal/privat (seperti `127.0.0.0/8`, `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`, dll.), sistem akan menolak pendaftaran webhook secara instan.
+3. **Pemberantasan DNS Rebinding**: Penyerang bisa melakukan trik di mana domain publik mereka saat pendaftaran mengarah ke IP publik yang aman, namun saat eksekusi worker domain tersebut diubah (rebind) untuk mengarah ke IP lokal internal. Untuk mengatasinya, worker BullMQ melakukan **DNS lookup ulang** tepat sebelum mengirimkan request HTTP POST.
+
+### C. Keamanan Tanda Tangan HMAC-SHA256
+Konsumen webhook perlu memverifikasi bahwa payload yang mereka terima benar-benar berasal dari SELADEV dan tidak dimanipulasi di tengah jalan.
+* **Tanda Tangan (Signature)**: Setiap payload di-POST dengan header `X-SELADEV-Signature` yang berisi tanda tangan HMAC-SHA256.
+* **Skema**: Tanda tangan dibuat dari penggabungan string `${timestamp}.${rawBody}` menggunakan kunci rahasia webhook (`secret` terenkripsi AES-256-GCM di database).
+* **Verifikasi**: Konsumen menghitung ulang HMAC di server mereka menggunakan kunci rahasia yang sama dan memverifikasinya. Menggunakan timestamp dalam string yang ditandatangani melindungi dari serangan replay (*replay attacks*).
+
+### D. Perputaran Rahasia & Grace Period (Secret Rotation)
+Untuk menjaga keamanan, kunci rahasia webhook perlu dirotasi secara berkala.
+* **Grace Period**: Saat pengguna memutar kunci rahasia webhook (`rotateSecret`), kunci lama tidak langsung dihapus. Kunci lama disimpan sebagai `previousSecret` dengan masa tenggang selama 10 menit (`previousSecretExpiresAt`).
+* **Mulus**: Selama masa tenggang ini, server konsumen tetap dapat memverifikasi tanda tangan webhook yang dibuat dengan kunci lama, menghindari kegagalan sistem selama masa transisi ke kunci baru.
+
+### E. Kebijakan Retries & Auto-Disable (Ketahanan Kegagalan)
+* **Exponential Backoff**: Jika server tujuan gagal merespons atau mengembalikan error HTTP (seperti 500), BullMQ worker secara otomatis menjadwalkan ulang pengiriman hingga 5 kali percobaan dengan jeda waktu yang meningkat secara eksponensial.
+* **410 Gone**: Jika server tujuan secara eksplisit mengembalikan kode status HTTP `410 Gone`, ini menandakan endpoint tersebut sudah tidak ada secara permanen. Worker akan langsung menonaktifkan webhook secara instan tanpa mencoba ulang.
+* **Auto-Disable**: Untuk menghemat resource dari pengiriman yang sia-sia, jika webhook gagal sebanyak 100 kali berturut-turut (`failureStreak >= 100`), sistem secara otomatis mengubah status ke `isActive = false` dan mencatat waktu penonaktifan di `disabledAt`.
+

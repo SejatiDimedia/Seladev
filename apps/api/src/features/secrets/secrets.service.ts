@@ -12,6 +12,7 @@ import type { AuditLogsService } from '../audit-logs/audit-logs.service';
 
 export interface SecretsUser {
   id: string;
+  email?: string;
   role: string;
   projectRole?: string;
   apiKeyProjectId?: string | null;
@@ -22,7 +23,8 @@ export class SecretsService {
   constructor(
     private readonly secretsRepo: SecretsRepository,
     private readonly projectsRepo: ProjectsRepository,
-    private readonly auditLogsService?: AuditLogsService
+    private readonly auditLogsService?: AuditLogsService,
+    private readonly webhookPublisher?: any
   ) {}
 
   /**
@@ -183,6 +185,20 @@ export class SecretsService {
       });
     }
 
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('secret.created', orgId, projectId, {
+        secret: {
+          id: secret.id,
+          key: secret.key,
+          environmentId,
+          createdBy: {
+            userId: user.id,
+            email: user.email || '',
+          },
+        },
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return secret;
   }
 
@@ -335,6 +351,26 @@ export class SecretsService {
       });
     }
 
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish(
+        'secret.updated',
+        secret.organizationId.toString(),
+        projectId,
+        {
+          secret: {
+            id: secret.id,
+            key: secret.key,
+            environmentId: secret.environmentId.toString(),
+            version: newVersion,
+            updatedBy: {
+              userId: user.id,
+              email: user.email || '',
+            }
+          }
+        }
+      ).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return secret;
   }
 
@@ -378,6 +414,25 @@ export class SecretsService {
           apiKeyId: (user as any).apiKeyId || null,
         },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish(
+        'secret.deleted',
+        secret.organizationId.toString(),
+        projectId,
+        {
+          secret: {
+            id: secret.id,
+            key: secret.key,
+            environmentId: secret.environmentId.toString(),
+            deletedBy: {
+              userId: user.id,
+              email: user.email || '',
+            }
+          }
+        }
+      ).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
   }
 
@@ -467,6 +522,26 @@ export class SecretsService {
           apiKeyId: (user as any).apiKeyId || null,
         },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish(
+        'secret.rotated',
+        secret.organizationId.toString(),
+        projectId,
+        {
+          secret: {
+            id: secret.id,
+            key: secret.key,
+            environmentId: secret.environmentId.toString(),
+            version: newVersion,
+            rotatedBy: {
+              userId: user.id,
+              email: user.email || '',
+            }
+          }
+        }
+      ).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
 
     return secret;

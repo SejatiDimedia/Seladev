@@ -7,10 +7,13 @@ import type { DeploymentStatus, StatusEvent } from '@seladev/types';
 import { MongooseAuditLogsRepository } from '../features/audit-logs/audit-logs.repository';
 import { MongooseOrganizationsRepository } from '../features/organizations/organizations.repository';
 import { AuditLogsService } from '../features/audit-logs/audit-logs.service';
+import { MongooseWebhooksRepository } from '../features/webhooks/webhooks.repository';
+import { WebhookPublisher } from '../features/webhooks/webhook.publisher';
 
 const auditLogsRepo = new MongooseAuditLogsRepository();
 const orgRepo = new MongooseOrganizationsRepository();
 const auditLogsService = new AuditLogsService(auditLogsRepo, orgRepo);
+const webhookPublisher = new WebhookPublisher(new MongooseWebhooksRepository());
 
 async function recordDeploymentAudit(
   deploymentId: string,
@@ -105,6 +108,13 @@ export async function processDeployment(job: Job): Promise<void> {
   const { deploymentId, orgId, gitRef } = job.data;
   const startTimestamp = Date.now();
 
+  const deployment = await DeploymentModel.findById(deploymentId).exec();
+  if (!deployment) {
+    console.warn(`[Deployment Worker] Deployment '${deploymentId}' not found. Skipping.`);
+    return;
+  }
+  const projectId = deployment.projectId.toString();
+
   try {
     const redis = getRedisClient();
 
@@ -116,6 +126,18 @@ export async function processDeployment(job: Job): Promise<void> {
         await transitionStatus(deploymentId, 'cancelled', 'Deployment cancelled by user', timestamp);
         emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'cancelled' });
         await recordDeploymentAudit(deploymentId, 'deployment.cancelled', 'success', { reason: 'User cancellation request' });
+        
+        webhookPublisher.publish('deployment.cancelled', orgId, projectId, {
+          deployment: {
+            id: deploymentId,
+            status: 'cancelled',
+            environmentId: deployment.environmentId.toString(),
+            triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+            gitRef: deployment.branch,
+            completedAt: timestamp.toISOString(),
+          }
+        }).catch((err: any) => console.error('Failed to publish webhook:', err));
+
         return true;
       }
       return false;
@@ -126,6 +148,17 @@ export async function processDeployment(job: Job): Promise<void> {
     // 2. QUEUED → BUILDING
     await transitionStatus(deploymentId, 'building', 'Starting build process');
     emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'building' });
+
+    webhookPublisher.publish('deployment.building', orgId, projectId, {
+      deployment: {
+        id: deploymentId,
+        status: 'building',
+        environmentId: deployment.environmentId.toString(),
+        triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+        gitRef: deployment.branch,
+        startedAt: new Date(startTimestamp).toISOString(),
+      }
+    }).catch((err: any) => console.error('Failed to publish webhook:', err));
 
     // 3. Simulate build phase with logs
     const logDelay = process.env.NODE_ENV === 'test' ? 10 : 300; // Faster in tests
@@ -146,6 +179,17 @@ export async function processDeployment(job: Job): Promise<void> {
     // 4. BUILDING → DEPLOYING
     await transitionStatus(deploymentId, 'deploying', 'Build complete, deploying to environment');
     emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'deploying' });
+
+    webhookPublisher.publish('deployment.deploying', orgId, projectId, {
+      deployment: {
+        id: deploymentId,
+        status: 'deploying',
+        environmentId: deployment.environmentId.toString(),
+        triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+        gitRef: deployment.branch,
+        startedAt: new Date(startTimestamp).toISOString(),
+      }
+    }).catch((err: any) => console.error('Failed to publish webhook:', err));
 
     // Simulate deploy phase
     const deployDelay = process.env.NODE_ENV === 'test' ? 20 : 1000;
@@ -176,6 +220,20 @@ export async function processDeployment(job: Job): Promise<void> {
         error: 'Container health check timeout',
       });
       await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: 'Container health check timeout', duration });
+
+      webhookPublisher.publish('deployment.failed', orgId, projectId, {
+        deployment: {
+          id: deploymentId,
+          status: 'failed',
+          environmentId: deployment.environmentId.toString(),
+          triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+          gitRef: deployment.branch,
+          duration,
+          errorMessage: 'Container health check timeout',
+          startedAt: new Date(startTimestamp).toISOString(),
+          completedAt: endTimestamp.toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     } else {
       await transitionStatus(
         deploymentId,
@@ -186,16 +244,30 @@ export async function processDeployment(job: Job): Promise<void> {
       );
       emitSocketEvent(orgId, 'deployment:status_changed', { deploymentId, status: 'success' });
       await recordDeploymentAudit(deploymentId, 'deployment.completed', 'success', { duration });
+
+      webhookPublisher.publish('deployment.completed', orgId, projectId, {
+        deployment: {
+          id: deploymentId,
+          status: 'success',
+          environmentId: deployment.environmentId.toString(),
+          triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+          gitRef: deployment.branch,
+          duration,
+          startedAt: new Date(startTimestamp).toISOString(),
+          completedAt: endTimestamp.toISOString(),
+        }
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
   } catch (err: any) {
     console.error('Error during deployment simulation:', err);
     const endTimestamp = new Error().stack ? new Date() : null;
+    const duration = Date.now() - startTimestamp;
     await transitionStatus(
       deploymentId,
       'failed',
       `Deployment failed with system error: ${err.message}`,
       endTimestamp,
-      Date.now() - startTimestamp,
+      duration,
       err.message
     );
     emitSocketEvent(orgId, 'deployment:status_changed', {
@@ -203,7 +275,21 @@ export async function processDeployment(job: Job): Promise<void> {
       status: 'failed',
       error: err.message,
     });
-    await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: err.message, duration: Date.now() - startTimestamp });
+    await recordDeploymentAudit(deploymentId, 'deployment.failed', 'failure', { error: err.message, duration });
+
+    webhookPublisher.publish('deployment.failed', orgId, projectId, {
+      deployment: {
+        id: deploymentId,
+        status: 'failed',
+        environmentId: deployment.environmentId.toString(),
+        triggeredBy: deployment.triggeredBy ? { userId: deployment.triggeredBy.toString() } : null,
+        gitRef: deployment.branch,
+        duration,
+        errorMessage: err.message,
+        startedAt: new Date(startTimestamp).toISOString(),
+        completedAt: endTimestamp ? endTimestamp.toISOString() : new Date().toISOString(),
+      }
+    }).catch((webhookErr: any) => console.error('Failed to publish webhook:', webhookErr));
   }
 }
 

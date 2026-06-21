@@ -201,6 +201,26 @@ Kami merancang dan mengimplementasikan modul **Audit Logs** untuk mencatat setia
 - **Pengujian Terotomatisasi (Vitest Suite)**:
   - Membuat 7 skenario tes integrasi komprehensif di `src/features/audit-logs/__tests__/audit-logs.test.ts` untuk memverifikasi fungsionalitas pencatatan log audit asinkron, proteksi peran (RBAC), pembatasan multi-tenant, pencarian filter, dan cursor pagination base64. Seluruh tes berhasil lulus 100% (total **67 passed tests** di seluruh monorepo).
 
+### 5.7 Webhooks Module & Asynchronous Delivery (Phase 3.6)
+Kami merancang dan mengimplementasikan modul **Webhooks** untuk mengirimkan event platform secara real-time ke sistem pihak ketiga yang didaftarkan oleh pengguna:
+- **Model & Skema Mongoose (`webhook.model.ts` & `webhook-delivery.model.ts`)**:
+  - `Webhook`: Menyimpan url target HTTPS, daftar event yang dilanggan, kunci rahasia tanda tangan (terenkripsi AES-256-GCM), streak kegagalan (`failureStreak`), status aktif (`isActive`), dan detail rotasi rahasia.
+  - `WebhookDelivery`: Log pengiriman yang menyimpan payload lengkap, status respons HTTP, dan riwayat percobaan pengiriman. Dilengkapi dengan MongoDB TTL index selama 90 hari pada field `expiresAt`.
+- **Perlindungan SSRF & DNS Rebinding Tingkat Pekerja (Worker-Level SSRF/DNS protection)**:
+  - Sebelum menyimpan URL dan sebelum worker BullMQ melakukan HTTP POST request, sistem melakukan DNS resolution menggunakan Node's `dns` module untuk memastikan host target tidak mengarah ke IP privat / loopback (`127.0.0.0/8`, `10.0.0.0/8`, `192.168.0.0/16`, `172.16.0.0/12`, dll.) atau metadata cloud (`169.254.169.254`).
+  - DNS resolved kembali sesaat sebelum request fetch dilakukan untuk menghindari celah serangan *DNS Rebinding*.
+- **Tanda Tangan HMAC-SHA256 & Perputaran Rahasia (Signature Signing & Secret Rotation)**:
+  - Setiap pengiriman ditandatangani menggunakan HMAC-SHA256 atas gabungan format `${timestamp}.${rawBody}` dan dikirim melalui header `X-SELADEV-Signature`.
+  - Rotasi rahasia (`rotateSecret`) mendukung grace period selama 10 menit dengan menyisakan kunci lama (`previousSecret`) untuk transisi verifikasi yang mulus di sisi konsumen.
+- **Auto-Disable & Retry Policy**:
+  - Jika webhook mengembalikan status HTTP `410 Gone`, webhook langsung dinonaktifkan secara otomatis.
+  - Webhook diulangi sebanyak 5 kali menggunakan antrean BullMQ (`webhooks`) dengan kebijakan exponential backoff.
+  - Jika webhook mengalami kegagalan berturut-turut sebanyak 100 kali (`failureStreak >= 100`), sistem secara otomatis menonaktifkan webhook tersebut (`isActive: false`) demi efisiensi resource.
+- **Integrasi Pemicu Event (Call-Site Event Emission)**:
+  - Event dipicu secara otomatis pada seluruh operasi mutasi data di platform: `project.*`, `secret.*`, `api_key.*`, `member.*`, dan `deployment.*`.
+- **Pengujian Terotomatisasi (Vitest Suite)**:
+  - Membuat 16 skenario tes integrasi komprehensif di `src/features/webhooks/__tests__/webhooks.test.ts` untuk memverifikasi fungsionalitas CRUD API, proteksi SSRF, worker delivery, HMAC-SHA256 signature validation, penanganan HTTP 410 Gone, auto-disable, dan grace period rotasi secret. Seluruh skenario tes berhasil lulus 100% (total **83 passed tests** di seluruh monorepo).
+
 ---
 
 ## Langkah Menjalankan Secara Lokal

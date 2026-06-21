@@ -25,7 +25,8 @@ export class ProjectsService {
   constructor(
     private readonly projectsRepo: ProjectsRepository,
     private readonly orgRepo: OrganizationsRepository,
-    private readonly auditLogsService?: AuditLogsService
+    private readonly auditLogsService?: AuditLogsService,
+    private readonly webhookPublisher?: any
   ) {}
 
   async createProject(
@@ -50,10 +51,10 @@ export class ProjectsService {
       throw new ValidationError([], `Project limit reached for this organization (Max: ${maxProjects})`);
     }
 
-    // 3. Generate and validate slug uniqueness within organization
+    // 3. Validate Slug Uniqueness
     const slug = dto.slug ? slugify(dto.slug) : slugify(dto.name);
-    const existingProject = await this.projectsRepo.findProjectBySlug(org.id, slug);
-    if (existingProject) {
+    const existing = await this.projectsRepo.findProjectBySlug(org.id, slug);
+    if (existing) {
       throw new ConflictError(`Project with slug "${slug}" already exists in this organization`);
     }
 
@@ -62,14 +63,19 @@ export class ProjectsService {
       organizationId: org.id,
       name: dto.name,
       slug,
-      description: dto.description,
-      visibility: dto.visibility,
-      repositoryUrl: dto.repositoryUrl ?? null,
-      tags: dto.tags,
+      description: dto.description || '',
+      visibility: dto.visibility || 'private',
+      repositoryUrl: dto.repositoryUrl || null,
+      tags: dto.tags || [],
+      settings: {
+        deploymentProtection: false,
+        requireApproval: false,
+        allowedBranches: [],
+      },
       createdBy: userId,
     });
 
-    // 5. Provision Default Environments (development, staging, production)
+    // 5. Auto-provision Environments (development, staging, production)
     await this.projectsRepo.createEnvironment({
       organizationId: org.id,
       projectId: projectDoc.id,
@@ -122,6 +128,18 @@ export class ProjectsService {
         outcome: 'success',
         metadata: { name: projectDoc.name, slug: projectDoc.slug, visibility: projectDoc.visibility },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('project.created', org.id, projectDoc.id, {
+        project: {
+          id: projectDoc.id,
+          name: projectDoc.name,
+          slug: projectDoc.slug,
+          visibility: projectDoc.visibility,
+          createdBy: userId,
+        },
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
 
     return projectDoc.toJSON() as unknown as Project;
@@ -197,6 +215,18 @@ export class ProjectsService {
       });
     }
 
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('project.updated', projectDoc.organizationId.toString(), projectDoc.id, {
+        project: {
+          id: projectDoc.id,
+          name: projectDoc.name,
+          slug: projectDoc.slug,
+          visibility: projectDoc.visibility,
+          updatedBy: userId,
+        },
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
+    }
+
     return projectDoc.toJSON() as unknown as Project;
   }
 
@@ -226,6 +256,17 @@ export class ProjectsService {
         resource: { type: 'project', id: projectDoc.id, name: projectDoc.name },
         outcome: 'success',
       });
+    }
+
+    if (this.webhookPublisher && userId) {
+      this.webhookPublisher.publish('project.archived', projectDoc.organizationId.toString(), projectDoc.id, {
+        project: {
+          id: projectDoc.id,
+          name: projectDoc.name,
+          slug: projectDoc.slug,
+          archivedBy: userId,
+        },
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
   }
 

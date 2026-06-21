@@ -21,3 +21,23 @@ export function getDeploymentsQueue(): Queue {
   }
   return deploymentsQueue;
 }
+
+let webhooksQueue: Queue | null = null;
+
+export function getWebhooksQueue(): Queue {
+  if (!webhooksQueue) {
+    webhooksQueue = new Queue('webhooks', {
+      connection: queueConnection,
+      defaultJobOptions: {
+        removeOnComplete: true,
+        removeOnFail: false,
+        attempts: 5,
+        backoff: {
+          type: 'exponential',
+          delay: 1000,
+        },
+      },
+    });
+  }
+  return webhooksQueue;
+}

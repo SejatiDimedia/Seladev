@@ -43,7 +43,8 @@ export class ApiKeysService {
     private readonly apiKeysRepo: ApiKeysRepository,
     private readonly projectsRepo: ProjectsRepository,
     private readonly orgRepo: OrganizationsRepository,
-    private readonly auditLogsService?: AuditLogsService
+    private readonly auditLogsService?: AuditLogsService,
+    private readonly webhookPublisher?: any
   ) {}
 
   /**
@@ -148,6 +149,19 @@ export class ApiKeysService {
           expiresAt: apiKey.expiresAt || null,
         },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish('api_key.created', org.id, dto.projectId || null, {
+        apiKey: {
+          id: apiKey.id,
+          name: apiKey.name,
+          prefix: apiKey.keyPrefix,
+          scopes: apiKey.scopes,
+          expiresAt: apiKey.expiresAt || null,
+          createdBy: user.id,
+        },
+      }).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
 
     return { apiKey, plainTextKey };
@@ -264,6 +278,22 @@ export class ApiKeysService {
         outcome: 'success',
         metadata: { revokedByDelete: true },
       });
+    }
+
+    if (this.webhookPublisher) {
+      this.webhookPublisher.publish(
+        'api_key.revoked',
+        key.organizationId.toString(),
+        key.projectId ? key.projectId.toString() : null,
+        {
+          apiKey: {
+            id: key.id,
+            name: key.name,
+            prefix: key.keyPrefix,
+            revokedBy: user.id,
+          },
+        }
+      ).catch((err: any) => console.error('Failed to publish webhook:', err));
     }
   }
 }

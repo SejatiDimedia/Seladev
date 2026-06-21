@@ -19,6 +19,11 @@ export interface ProjectsRepository {
     visibility?: 'private' | 'internal';
     repositoryUrl?: string | null;
     tags?: string[];
+    settings?: {
+      deploymentProtection?: boolean;
+      requireApproval?: boolean;
+      allowedBranches?: string[];
+    };
     createdBy: string;
   }): Promise<ProjectDocument>;
   updateProject(id: string, update: Partial<ProjectDocument>): Promise<ProjectDocument | null>;
@@ -77,6 +82,11 @@ export class MongooseProjectsRepository implements ProjectsRepository {
     visibility?: 'private' | 'internal';
     repositoryUrl?: string | null;
     tags?: string[];
+    settings?: {
+      deploymentProtection?: boolean;
+      requireApproval?: boolean;
+      allowedBranches?: string[];
+    };
     createdBy: string;
   }): Promise<ProjectDocument> {
     return ProjectModel.create({
@@ -87,6 +97,11 @@ export class MongooseProjectsRepository implements ProjectsRepository {
       visibility: data.visibility || 'private',
       repositoryUrl: data.repositoryUrl || null,
       tags: data.tags || [],
+      settings: data.settings || {
+        deploymentProtection: false,
+        requireApproval: false,
+        allowedBranches: [],
+      },
       createdBy: new mongoose.Types.ObjectId(data.createdBy),
     });
   }
