@@ -10,7 +10,8 @@ export const updateMemberRoleSchema = z.object({
 });
 
 export const assignProjectMemberSchema = z.object({
-  userId: z.string().min(1, 'User ID is required'),
+  userId: z.string().min(1, 'User ID is required').optional(),
+  email: z.string().email('Invalid email address').optional(),
   role: z.enum(['admin', 'developer', 'viewer']).default('developer'),
 });
 

@@ -2,6 +2,7 @@ import { useState, useEffect, FormEvent } from 'react';
 import { useOrgStore } from '../../../stores/org.store';
 import { apiClient } from '../../../lib/api-client';
 import { Key, Plus, Loader2, Copy, Check, Trash2, AlertTriangle } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 interface ApiKey {
   id: string;
@@ -28,7 +29,7 @@ export function ApiKeysPage() {
   const [description, setDescription] = useState('');
   const [scopes, setScopes] = useState<string[]>(['secrets:read']);
   const [expiryDays, setExpiryDays] = useState('30');
-  
+
   // Response states
   const [createLoading, setCreateLoading] = useState(false);
   const [createdRawKey, setCreatedRawKey] = useState<string | null>(null);
@@ -58,7 +59,7 @@ export function ApiKeysPage() {
 
     setCreateLoading(true);
     setError(null);
-    
+
     // Calculate expiration date
     let expiresAt: string | null = null;
     if (expiryDays !== 'never') {
@@ -74,11 +75,11 @@ export function ApiKeysPage() {
         scopes,
         expiresAt
       });
-      
+
       const { apiKey, secretKey } = response.data.data;
       setKeys((prev) => [...prev, apiKey]);
       setCreatedRawKey(secretKey);
-      
+
       // Reset inputs
       setName('');
       setDescription('');
@@ -229,7 +230,7 @@ export function ApiKeysPage() {
       )}
 
       {/* Generate API Key Modal */}
-      {showCreateModal && !createdRawKey && (
+      {showCreateModal && !createdRawKey && createPortal(
         <>
           <div onClick={() => setShowCreateModal(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#09090b] border border-white/10 p-6 rounded-3xl z-[10000] shadow-xl space-y-6">
@@ -316,7 +317,7 @@ export function ApiKeysPage() {
               </div>
             </form>
           </div>
-        </>
+        </>, document.body
       )}
 
       {/* Raw Key Display Modal (Display once) */}

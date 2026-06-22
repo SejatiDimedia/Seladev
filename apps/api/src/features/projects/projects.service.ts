@@ -69,7 +69,7 @@ export class ProjectsService {
       repositoryUrl: dto.repositoryUrl || null,
       tags: dto.tags || [],
       settings: {
-        deploymentProtection: false,
+        deploymentProtection: true,
         requireApproval: false,
         allowedBranches: [],
       },
@@ -421,14 +421,28 @@ export class ProjectsService {
       throw new NotFoundError('Project', projectId);
     }
 
+    // Resolve email to userId if userId is not provided but email is
+    let userId = dto.userId;
+    if (!userId && (dto as any).email) {
+      const user = await this.orgRepo.findUserByEmail((dto as any).email);
+      if (!user) {
+        throw new NotFoundError('User', (dto as any).email);
+      }
+      userId = user.id;
+    }
+
+    if (!userId) {
+      throw new ValidationError([], 'User ID or email is required');
+    }
+
     // 1. Verify user is active in organization
-    const orgMembership = await this.orgRepo.findMembership(projectDoc.organizationId.toString(), dto.userId);
+    const orgMembership = await this.orgRepo.findMembership(projectDoc.organizationId.toString(), userId);
     if (!orgMembership || orgMembership.status !== 'active') {
       throw new ValidationError([], 'User must be an active member of the parent organization');
     }
 
     // 2. Verify user not already in project
-    const existingMember = await this.projectsRepo.findProjectMember(projectId, dto.userId);
+    const existingMember = await this.projectsRepo.findProjectMember(projectId, userId);
     if (existingMember) {
       throw new ConflictError('User is already a member of this project');
     }
@@ -436,14 +450,18 @@ export class ProjectsService {
     // 3. Add user
     const memberDoc = await this.projectsRepo.addProjectMember({
       projectId,
-      userId: dto.userId,
+      userId,
       role: dto.role,
       assignedBy,
     });
 
+    if (typeof memberDoc.populate === 'function') {
+      await memberDoc.populate('userId');
+    }
+
     if (this.notificationsService) {
       await this.notificationsService.createNotification(
-        dto.userId,
+        userId,
         projectDoc.organizationId.toString(),
         'member.added',
         'Added to Project',
@@ -462,7 +480,7 @@ export class ProjectsService {
           userAgent: clientContext?.userAgent || null,
         },
         action: 'project.member_added',
-        resource: { type: 'member', id: dto.userId, name: `User ${dto.userId}` },
+        resource: { type: 'member', id: userId, name: `User ${userId}` },
         outcome: 'success',
         metadata: { role: dto.role },
       });

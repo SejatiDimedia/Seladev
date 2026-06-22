@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useOrgStore } from '../../../stores/org.store';
 import { apiClient } from '../../../lib/api-client';
 import { Folder, Plus, Loader2, ArrowRight, Layers, LayoutGrid, Calendar } from 'lucide-react';
+import { createPortal } from 'react-dom';
 
 interface Project {
   id: string;
@@ -130,7 +131,7 @@ export function ProjectsPage() {
             >
               {/* Subtle hover background highlight */}
               <div className="absolute inset-0 bg-indigo-500/[0.01] opacity-0 group-hover:opacity-100 transition-opacity"></div>
-              
+
               <div className="space-y-4">
                 <div className="flex justify-between items-start">
                   <div className="p-3 bg-white/5 rounded-xl border border-white/5 flex items-center justify-center text-indigo-400 group-hover:text-indigo-300 transition-colors">
@@ -168,7 +169,7 @@ export function ProjectsPage() {
       )}
 
       {/* Create Project Modal */}
-      {showCreateModal && (
+      {showCreateModal && createPortal(
         <>
           <div onClick={() => setShowCreateModal(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#09090b] border border-white/10 p-6 rounded-3xl z-[10000] shadow-xl space-y-6">
@@ -192,7 +193,7 @@ export function ProjectsPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. auth-service"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -203,7 +204,7 @@ export function ProjectsPage() {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Service role description..."
                   rows={3}
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors resize-none"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors resize-none"
                 />
               </div>
 
@@ -225,8 +226,8 @@ export function ProjectsPage() {
               </div>
             </form>
           </div>
-        </>
-      )}
+        </>,
+        document.body)}
     </div>
   );
 }

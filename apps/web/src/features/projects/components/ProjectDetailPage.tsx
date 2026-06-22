@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useParams, Link } from 'react-router-dom';
 import { apiClient } from '../../../lib/api-client';
 import { ConfirmationDialog } from '../../../components/ui/ConfirmationDialog';
+import { Modal } from '../../../components/ui/Modal';
 
 import {
   Layers,
@@ -71,7 +72,7 @@ export function ProjectDetailPage() {
   const [project, setProject] = useState<any>(null);
   const [environments, setEnvironments] = useState<Environment[]>([]);
   const [selectedEnvId, setSelectedEnvId] = useState<string>('');
-  
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'envs' | 'deployments' | 'members'>('envs');
@@ -109,13 +110,14 @@ export function ProjectDetailPage() {
     isOpen: false,
     title: '',
     description: '',
-    onConfirm: () => {},
+    onConfirm: () => { },
   });
 
   // Deployments state
   const [deployments, setDeployments] = useState<Deployment[]>([]);
   const [deploymentsLoading, setDeploymentsLoading] = useState(false);
   const [showTriggerDeployModal, setShowTriggerDeployModal] = useState(false);
+  const [deployEnvId, setDeployEnvId] = useState<string>('');
   const [deployBranch, setDeployBranch] = useState('main');
   const [deployCommitMsg, setDeployCommitMsg] = useState('');
   const [deployCommitHash, setDeployCommitHash] = useState('');
@@ -128,6 +130,13 @@ export function ProjectDetailPage() {
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [newMemberRole, setNewMemberRole] = useState<'admin' | 'developer' | 'viewer'>('viewer');
   const [addMemberLoading, setAddMemberLoading] = useState(false);
+  const [addMemberError, setAddMemberError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showAddMemberModal) {
+      setAddMemberError(null);
+    }
+  }, [showAddMemberModal]);
 
   const selectedEnv = environments.find((e) => e.id === selectedEnvId);
 
@@ -366,12 +375,13 @@ export function ProjectDetailPage() {
 
   const handleTriggerDeployment = async (e: FormEvent) => {
     e.preventDefault();
-    if (!selectedEnvId) return;
+    const targetEnvId = deployEnvId || selectedEnvId;
+    if (!targetEnvId) return;
 
     setTriggerLoading(true);
     try {
       const response = await apiClient.post(`/projects/${projectId}/deployments`, {
-        environmentId: selectedEnvId,
+        environmentId: targetEnvId,
         branch: deployBranch,
         commitMessage: deployCommitMsg || undefined,
         commitHash: deployCommitHash || undefined
@@ -380,7 +390,8 @@ export function ProjectDetailPage() {
       setDeployBranch('main');
       setDeployCommitMsg('');
       setDeployCommitHash('');
-      
+      setDeployEnvId('');
+
       // If currently on deployments tab, append the new deployment
       if (activeTab === 'deployments') {
         setDeployments((prev) => [response.data.data, ...prev]);
@@ -399,6 +410,7 @@ export function ProjectDetailPage() {
     if (!newMemberEmail.trim()) return;
 
     setAddMemberLoading(true);
+    setAddMemberError(null);
     try {
       const response = await apiClient.post(`/projects/${projectId}/members`, {
         email: newMemberEmail,
@@ -409,7 +421,7 @@ export function ProjectDetailPage() {
       setNewMemberEmail('');
       setNewMemberRole('viewer');
     } catch (err: any) {
-      alert(err.message || 'Failed to add member');
+      setAddMemberError(err.message || 'Failed to add member');
     } finally {
       setAddMemberLoading(false);
     }
@@ -423,6 +435,22 @@ export function ProjectDetailPage() {
       setMembers((prev) => prev.filter((m) => m.userId !== userId));
     } catch (err: any) {
       alert(err.message || 'Failed to remove member');
+    }
+  };
+
+  const handleToggleDeploymentProtection = async () => {
+    if (!project) return;
+    const newValue = !project.settings?.deploymentProtection;
+    try {
+      await apiClient.patch(`/projects/${projectId}`, {
+        settings: { deploymentProtection: newValue },
+      });
+      setProject((prev: any) => ({
+        ...prev,
+        settings: { ...prev.settings, deploymentProtection: newValue },
+      }));
+    } catch (err: any) {
+      alert(err.message || 'Failed to update project settings');
     }
   };
 
@@ -458,8 +486,13 @@ export function ProjectDetailPage() {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setShowTriggerDeployModal(true)}
-            className="flex items-center gap-2 px-4.5 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold rounded-xl text-xs transition-all shadow-lg shadow-indigo-500/25"
+            onClick={() => {
+            // Default to production env when opening trigger modal
+            const prodEnv = environments.find((e) => e.type === 'production');
+            setDeployEnvId(prodEnv?.id || selectedEnvId || '');
+            setShowTriggerDeployModal(true);
+          }}
+            className="flex items-center gap-2 px-4 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white font-bold rounded-xl text-xs transition-all shadow-lg shadow-indigo-500/25"
           >
             <Play className="w-3.5 h-3.5 fill-current" />
             Trigger Build
@@ -607,6 +640,44 @@ export function ProjectDetailPage() {
               </table>
             </div>
           )}
+
+          {/* Project Settings — Deployment Protection Toggle */}
+          <div className="mt-6 p-5 glass-card rounded-2xl border border-white/5 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="space-y-1">
+                <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-amber-400" />
+                  Production Deployment Protection
+                </h4>
+                <p className="text-xs text-neutral-400 font-light leading-relaxed">
+                  When enabled, any deployment targeting a <span className="text-amber-400 font-semibold">protected environment</span> (e.g. Production) will be held in <code className="text-amber-300 bg-amber-500/10 px-1 rounded">pending_approval</code> status until an Admin manually approves or rejects it.
+                </p>
+              </div>
+              <button
+                onClick={handleToggleDeploymentProtection}
+                className={clsx(
+                  'relative flex-shrink-0 w-11 h-6 rounded-full transition-colors duration-200 focus:outline-none',
+                  project?.settings?.deploymentProtection
+                    ? 'bg-amber-500'
+                    : 'bg-white/10'
+                )}
+                title={project?.settings?.deploymentProtection ? 'Disable deployment protection' : 'Enable deployment protection'}
+              >
+                <span
+                  className={clsx(
+                    'absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200',
+                    project?.settings?.deploymentProtection ? 'translate-x-5' : 'translate-x-0'
+                  )}
+                />
+              </button>
+            </div>
+            {project?.settings?.deploymentProtection && (
+              <div className="flex items-center gap-2 text-amber-400 text-xs font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                Deployment protection is <strong>active</strong>. Builds to Production will require manual approval.
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -640,7 +711,8 @@ export function ProjectDetailPage() {
                         deploy.status === 'SUCCESS' && 'bg-emerald-500 shadow-md shadow-emerald-500/20',
                         deploy.status === 'FAILED' && 'bg-red-500 shadow-md shadow-red-500/20',
                         deploy.status === 'RUNNING' && 'bg-indigo-500 animate-pulse',
-                        deploy.status === 'QUEUED' && 'bg-amber-500 animate-pulse'
+                        deploy.status === 'QUEUED' && 'bg-amber-500 animate-pulse',
+                        (deploy.status === 'PENDING_APPROVAL' || deploy.status === 'pending_approval') && 'bg-amber-400 shadow-md shadow-amber-400/30'
                       )}
                     ></div>
 
@@ -656,8 +728,14 @@ export function ProjectDetailPage() {
                           <GitBranch className="w-3.5 h-3.5" />
                           {deploy.branch}
                         </span>
+                        {(deploy.status === 'PENDING_APPROVAL' || deploy.status === 'pending_approval') && (
+                          <span className="flex items-center gap-1 text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-md">
+                            <Lock className="w-2.5 h-2.5" />
+                            Awaiting Approval
+                          </span>
+                        )}
                       </div>
-                      
+
                       {deploy.commitMessage && (
                         <p className="text-xs text-neutral-300 truncate font-light">
                           {deploy.commitMessage}
@@ -772,7 +850,7 @@ export function ProjectDetailPage() {
                   value={newSecretKey}
                   onChange={(e) => setNewSecretKey(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, ''))}
                   placeholder="DATABASE_URL"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -784,7 +862,7 @@ export function ProjectDetailPage() {
                   value={newSecretVal}
                   onChange={(e) => setNewSecretVal(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -795,7 +873,7 @@ export function ProjectDetailPage() {
                   value={newSecretDesc}
                   onChange={(e) => setNewSecretDesc(e.target.value)}
                   placeholder="Database connection endpoint"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -840,7 +918,7 @@ export function ProjectDetailPage() {
                   value={editSecretVal}
                   onChange={(e) => setEditSecretVal(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -933,7 +1011,7 @@ export function ProjectDetailPage() {
       {/* Modal: TRIGGER DEPLOYMENT BUILD */}
       {showTriggerDeployModal && createPortal(
         <>
-          <div onClick={() => setShowTriggerDeployModal(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
+          <div onClick={() => { setShowTriggerDeployModal(false); setDeployEnvId(''); }} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#09090b] border border-white/10 p-6 rounded-3xl z-[10000] shadow-xl space-y-6">
             <div>
               <h3 className="font-extrabold text-lg text-white">Trigger Pipeline Build</h3>
@@ -943,6 +1021,28 @@ export function ProjectDetailPage() {
             </div>
 
             <form onSubmit={handleTriggerDeployment} className="space-y-5">
+              {/* Environment Selector */}
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Target Environment</label>
+                <select
+                  value={deployEnvId}
+                  onChange={(e) => setDeployEnvId(e.target.value)}
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                >
+                  {environments.map((env) => (
+                    <option key={env.id} value={env.id}>
+                      {env.name.charAt(0).toUpperCase() + env.name.slice(1)}{env.isProtected ? ' 🔒' : ''}
+                    </option>
+                  ))}
+                </select>
+                {environments.find((e) => e.id === deployEnvId)?.isProtected && (
+                  <div className="flex items-center gap-2 px-3 py-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-400 text-xs font-medium">
+                    <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>Protected environment — deployment will be held for <strong>manual approval</strong> before running.</span>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Git Branch</label>
                 <input
@@ -951,7 +1051,7 @@ export function ProjectDetailPage() {
                   value={deployBranch}
                   onChange={(e) => setDeployBranch(e.target.value)}
                   placeholder="main"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -962,7 +1062,7 @@ export function ProjectDetailPage() {
                   value={deployCommitMsg}
                   onChange={(e) => setDeployCommitMsg(e.target.value)}
                   placeholder="Initial landing page design"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
@@ -973,14 +1073,14 @@ export function ProjectDetailPage() {
                   value={deployCommitHash}
                   onChange={(e) => setDeployCommitHash(e.target.value)}
                   placeholder="e.g. 7f9a12c"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors"
+                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm font-mono focus:outline-none focus:border-indigo-500 transition-colors"
                 />
               </div>
 
               <div className="flex justify-end gap-3 text-xs font-semibold pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowTriggerDeployModal(false)}
+                  onClick={() => { setShowTriggerDeployModal(false); setDeployEnvId(''); }}
                   className="px-4 py-2.5 hover:bg-white/5 rounded-xl text-neutral-400 hover:text-white transition-colors"
                 >
                   Cancel
@@ -1000,62 +1100,63 @@ export function ProjectDetailPage() {
       )}
 
       {/* Modal: ADD MEMBER */}
-      {showAddMemberModal && createPortal(
-        <>
-          <div onClick={() => setShowAddMemberModal(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
-          <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#09090b] border border-white/10 p-6 rounded-3xl z-[10000] shadow-xl space-y-6">
-            <div>
-              <h3 className="font-extrabold text-lg text-white">Add Project Member</h3>
-              <p className="text-xs text-neutral-400">Grant permissions to a team member on this project.</p>
-            </div>
-
-            <form onSubmit={handleAddMember} className="space-y-5">
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">User Email</label>
-                <input
-                  type="email"
-                  required
-                  value={newMemberEmail}
-                  onChange={(e) => setNewMemberEmail(e.target.value)}
-                  placeholder="collaborator@company.com"
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Project Role</label>
-                <select
-                  value={newMemberRole}
-                  onChange={(e) => setNewMemberRole(e.target.value as any)}
-                  className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors text-white"
-                >
-                  <option value="viewer">Viewer (Read logs and secrets metadata)</option>
-                  <option value="developer">Developer (Add secrets and trigger builds)</option>
-                  <option value="admin">Admin (Manage access control and settings)</option>
-                </select>
-              </div>
-
-              <div className="flex justify-end gap-3 text-xs font-semibold pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAddMemberModal(false)}
-                  className="px-4 py-2.5 hover:bg-white/5 rounded-xl text-neutral-400 hover:text-white transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={addMemberLoading || !newMemberEmail.trim()}
-                  className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-xl transition-colors flex items-center gap-1.5"
-                >
-                  {addMemberLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Add Member'}
-                </button>
-              </div>
-            </form>
+      <Modal
+        isOpen={showAddMemberModal}
+        onClose={() => setShowAddMemberModal(false)}
+        title="Add Project Member"
+        description="Grant permissions to a team member on this project."
+      >
+        {addMemberError && (
+          <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0 animate-pulse" />
+            <span className="font-medium">{addMemberError}</span>
           </div>
-        </>,
-        document.body
-      )}
+        )}
+
+        <form onSubmit={handleAddMember} className="space-y-5">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">User Email</label>
+            <input
+              type="email"
+              required
+              value={newMemberEmail}
+              onChange={(e) => setNewMemberEmail(e.target.value)}
+              placeholder="collaborator@company.com"
+              className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Project Role</label>
+            <select
+              value={newMemberRole}
+              onChange={(e) => setNewMemberRole(e.target.value as any)}
+              className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors text-white"
+            >
+              <option value="viewer">Viewer (Read logs and secrets metadata)</option>
+              <option value="developer">Developer (Add secrets and trigger builds)</option>
+              <option value="admin">Admin (Manage access control and settings)</option>
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-3 text-xs font-semibold pt-2">
+            <button
+              type="button"
+              onClick={() => setShowAddMemberModal(false)}
+              className="px-4 py-2.5 hover:bg-white/5 rounded-xl text-neutral-400 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={addMemberLoading || !newMemberEmail.trim()}
+              className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-xl transition-colors flex items-center gap-1.5"
+            >
+              {addMemberLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Add Member'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Reusable Custom Confirmation Dialog */}
       <ConfirmationDialog

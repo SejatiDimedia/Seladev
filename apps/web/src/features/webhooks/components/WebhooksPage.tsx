@@ -13,6 +13,7 @@ import {
   Globe
 } from 'lucide-react';
 import clsx from 'clsx';
+import { createPortal } from 'react-dom';
 
 interface Webhook {
   id: string;
@@ -52,7 +53,7 @@ export function WebhooksPage() {
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<string[]>(['deployment.completed']);
   const [createLoading, setCreateLoading] = useState(false);
-  
+
   // Revealed secrets state
   const [revealedSecrets, setRevealedSecrets] = useState<Record<string, boolean>>({});
 
@@ -131,7 +132,7 @@ export function WebhooksPage() {
     try {
       await apiClient.post(`/organizations/${activeOrgId}/webhooks/${webhookId}/test`);
       alert('Test webhook ping sent to the background queue!');
-      
+
       // If delivery log viewer is active for this webhook, reload log history
       if (selectedWebhookForLogs?.id === webhookId) {
         fetchDeliveries(webhookId);
@@ -304,7 +305,7 @@ export function WebhooksPage() {
       )}
 
       {/* Add Webhook Modal */}
-      {showCreateModal && (
+      {showCreateModal && createPortal(
         <>
           <div onClick={() => setShowCreateModal(false)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
           <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md bg-[#09090b] border border-white/10 p-6 rounded-3xl z-[10000] shadow-xl space-y-6">
@@ -377,11 +378,11 @@ export function WebhooksPage() {
               </div>
             </form>
           </div>
-        </>
+        </>, document.body
       )}
 
       {/* Webhook Delivery Logs Drawer */}
-      {selectedWebhookForLogs && (
+      {selectedWebhookForLogs && createPortal(
         <>
           <div onClick={() => setSelectedWebhookForLogs(null)} className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999]"></div>
           <div className="fixed top-0 right-0 h-full w-full max-w-lg bg-[#09090b] border-l border-white/5 p-6 z-[10000] transition-transform duration-300 flex flex-col shadow-2xl">
@@ -449,8 +450,8 @@ export function WebhooksPage() {
               )}
             </div>
           </div>
-        </>
-      )}
+        </>,
+        document.body)}
     </div>
   );
 }

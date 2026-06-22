@@ -48,7 +48,7 @@ const ProjectSchema = new Schema<ProjectDocument>(
     settings: {
       deploymentProtection: {
         type: Boolean,
-        default: false,
+        default: true,
       },
       requireApproval: {
         type: Boolean,

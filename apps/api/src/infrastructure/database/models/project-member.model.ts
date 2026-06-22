@@ -41,7 +41,13 @@ const ProjectMemberSchema = new Schema<ProjectMemberDocument>(
         const obj = ret as any;
         obj.id = obj._id.toString();
         obj.projectId = obj.projectId.toString();
-        obj.userId = obj.userId.toString();
+        if (obj.userId && typeof obj.userId === 'object') {
+          obj.name = `${obj.userId.firstName || ''} ${obj.userId.lastName || ''}`.trim() || 'Unknown';
+          obj.email = obj.userId.email;
+          obj.userId = (obj.userId._id || obj.userId.id || '').toString();
+        } else if (obj.userId) {
+          obj.userId = obj.userId.toString();
+        }
         obj.assignedBy = obj.assignedBy.toString();
         delete obj._id;
         delete obj.__v;

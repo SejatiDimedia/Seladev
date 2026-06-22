@@ -31,7 +31,7 @@ export interface DeploymentsRepository {
 
 export class MongooseDeploymentsRepository implements DeploymentsRepository {
   async findDeploymentById(id: string): Promise<DeploymentDocument | null> {
-    return DeploymentModel.findById(id).exec();
+    return DeploymentModel.findById(id).populate('triggeredBy', 'name email').exec();
   }
 
   async createDeployment(data: {
@@ -132,6 +132,7 @@ export class MongooseDeploymentsRepository implements DeploymentsRepository {
     const deployments = await DeploymentModel.find(query)
       .sort({ _id: -1 })
       .limit(limit + 1)
+      .populate('triggeredBy', 'name email')
       .exec();
 
     const hasNext = deployments.length > limit;

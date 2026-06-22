@@ -5,6 +5,7 @@ import { useOrgStore, Organization } from '../../stores/org.store';
 import { apiClient } from '../../lib/api-client';
 import { NotificationDrawer } from './NotificationDrawer';
 import { MfaSettingsModal } from '../../features/auth/components/MfaSettingsModal';
+import { Modal } from '../ui/Modal';
 import {
   Cpu,
   Layers,
@@ -18,7 +19,8 @@ import {
   ChevronDown,
   Menu,
   X,
-  Plus
+  Plus,
+  Loader2
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -45,6 +47,21 @@ export function AppLayout() {
   const [newOrgName, setNewOrgName] = useState('');
   const [createOrgLoading, setCreateOrgLoading] = useState(false);
   const [showMfaModal, setShowMfaModal] = useState(false);
+  const [showInviteMemberModal, setShowInviteMemberModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'admin' | 'member' | 'viewer'>('member');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!showInviteMemberModal) {
+      setInviteEmail('');
+      setInviteRole('member');
+      setInviteError(null);
+      setInviteSuccess(false);
+    }
+  }, [showInviteMemberModal]);
 
   const activeOrg = organizations.find((o) => o.id === activeOrgId);
 
@@ -118,6 +135,31 @@ export function AppLayout() {
       console.error('Failed to create organization', err);
     } finally {
       setCreateOrgLoading(false);
+    }
+  };
+
+  const handleInviteMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim() || !activeOrgId) return;
+
+    setInviteLoading(true);
+    setInviteError(null);
+    setInviteSuccess(false);
+    try {
+      await apiClient.post(`/organizations/${activeOrgId}/members`, {
+        email: inviteEmail,
+        role: inviteRole
+      });
+      setInviteSuccess(true);
+      setInviteEmail('');
+      setInviteRole('member');
+      setTimeout(() => {
+        setShowInviteMemberModal(false);
+      }, 2000);
+    } catch (err: any) {
+      setInviteError(err.message || 'Failed to invite member to workspace');
+    } finally {
+      setInviteLoading(false);
     }
   };
 
@@ -196,6 +238,18 @@ export function AppLayout() {
                 <Plus className="w-3.5 h-3.5" />
                 New Workspace
               </button>
+              {activeOrgId && (
+                <button
+                  onClick={() => {
+                    setOrgDropdownOpen(false);
+                    setShowInviteMemberModal(true);
+                  }}
+                  className="w-full text-left px-4 py-2 text-xs font-medium text-indigo-400 hover:bg-white/5 transition-colors flex items-center gap-1.5 mt-0.5"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Invite Member
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -434,6 +488,72 @@ export function AppLayout() {
           </div>
         </>
       )}
+
+      {/* Modal: Invite Member */}
+      <Modal
+        isOpen={showInviteMemberModal}
+        onClose={() => setShowInviteMemberModal(false)}
+        title="Invite Member to Workspace"
+        description={`Add a registered user to the "${activeOrg?.name || 'Workspace'}" organization.`}
+      >
+        {inviteError && (
+          <div className="p-3.5 bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0 animate-pulse" />
+            <span className="font-medium">{inviteError}</span>
+          </div>
+        )}
+
+        {inviteSuccess && (
+          <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs rounded-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-2 duration-200">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+            <span className="font-medium">User successfully invited to the workspace!</span>
+          </div>
+        )}
+
+        <form onSubmit={handleInviteMember} className="space-y-5">
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">User Email</label>
+            <input
+              type="email"
+              required
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="collaborator@company.com"
+              className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-white text-sm focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Organization Role</label>
+            <select
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as any)}
+              className="w-full px-4 py-3 bg-neutral-900 border border-white/10 rounded-xl text-sm focus:outline-none focus:border-indigo-500 transition-colors text-white"
+            >
+              <option value="viewer">Viewer (Read access to workspace resources)</option>
+              <option value="member">Member (Create and manage projects and configurations)</option>
+              <option value="admin">Admin (Manage users, billing, and full workspace settings)</option>
+            </select>
+          </div>
+
+          <div className="flex justify-end gap-3 text-xs font-semibold pt-2">
+            <button
+              type="button"
+              onClick={() => setShowInviteMemberModal(false)}
+              className="px-4 py-2.5 hover:bg-white/5 rounded-xl text-neutral-400 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={inviteLoading || !inviteEmail.trim()}
+              className="px-4 py-2.5 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white rounded-xl transition-colors flex items-center gap-1.5"
+            >
+              {inviteLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Invite Member'}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Notifications Drawer */}
       <NotificationDrawer

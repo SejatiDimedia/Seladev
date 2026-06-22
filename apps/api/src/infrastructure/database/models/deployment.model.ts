@@ -122,7 +122,16 @@ const DeploymentSchema = new Schema<DeploymentDocument>(
         obj.organizationId = obj.organizationId.toString();
         obj.projectId = obj.projectId.toString();
         obj.environmentId = obj.environmentId.toString();
-        obj.triggeredBy = obj.triggeredBy.toString();
+        // If triggeredBy was populated (is an object with _id), return user info; else just stringify the ObjectId
+        if (obj.triggeredBy && typeof obj.triggeredBy === 'object' && obj.triggeredBy._id) {
+          obj.triggeredBy = {
+            id: obj.triggeredBy._id.toString(),
+            name: obj.triggeredBy.name || null,
+            email: obj.triggeredBy.email || null,
+          };
+        } else {
+          obj.triggeredBy = obj.triggeredBy?.toString() || null;
+        }
         if (obj.completedAt) {
           obj.completedAt = obj.completedAt.toISOString();
         }
