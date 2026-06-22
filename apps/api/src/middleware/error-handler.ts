@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
+import { ZodError } from 'zod';
 import { BaseError, InternalError, ValidationError, RateLimitError } from '../lib/errors';
+import { formatZodError } from './validate-request';
 import { config } from '../config';
 
 const logger = {
@@ -20,9 +22,14 @@ export function globalErrorHandler(
   const requestId = req.headers['x-request-id'] as string | undefined;
 
   // Normalize to BaseError
-  const appError: BaseError = err instanceof BaseError
-    ? err
-    : new InternalError('An unexpected error occurred', err);
+  let appError: BaseError;
+  if (err instanceof BaseError) {
+    appError = err;
+  } else if (err instanceof ZodError) {
+    appError = new ValidationError(formatZodError(err));
+  } else {
+    appError = new InternalError('An unexpected error occurred', err);
+  }
 
   // Log with structured context
   const logLevel = appError.isOperational ? 'warn' : 'error';
@@ -32,7 +39,10 @@ export function globalErrorHandler(
       message: appError.message,
       code: appError.code,
       statusCode: appError.statusCode,
-      stack: appError.stack,
+      stack: appError instanceof InternalError && appError.cause instanceof Error
+        ? appError.cause.stack
+        : appError.stack,
+      cause: appError instanceof InternalError ? appError.cause : undefined,
     },
     requestId,
     method: req.method,

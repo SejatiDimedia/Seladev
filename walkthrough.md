@@ -311,7 +311,56 @@ Kami merancang dan mengimplementasikan Sistem Notifikasi menyeluruh berbasis rea
 - **Komunikasi Real-time & Asinkron**: Mengintegrasikan Socket.IO ke room pengguna `user:${userId}` untuk menyalurkan log notifikasi dan pembaruan unread count secara langsung. Menggunakan BullMQ antrean `email-notifications` untuk mengirim email via `nodemailer` (dengan fallback mock logging ke konsol).
 - **Pengaturan Preferensi Pengguna & Security Bypass**: Menyimpan preferensi in-app/email pengguna untuk event deployments, secrets, API keys, dan webhooks. Event keamanan kritis seperti `role.changed` dan `member.added` melompati pengaturan preferensi ini (*security override*) untuk menjamin auditabilitas.
 - **Pendeteksi Kedaluwarsa Terjadwal (Cron Job)**: Mendaftarkan cron job harian (`system-tasks`) di BullMQ untuk memindai secrets dan API keys yang kedaluwarsa dalam 7 hari, mengirimkan notifikasi kepada admin proyek/organisasi terkait, dan memperbarui properti `expiryNotified: true` untuk mencegah duplikasi notifikasi.
-- **Pengujian Terotomatisasi (Vitest Suite)**: Membuat berkas tes integrasi baru `apps/api/src/features/notifications/__tests__/notifications.test.ts` (13 tes) untuk memvalidasi default preferensi user baru, fungsionalitas email queue/socket stream, pembacaan, dan scheduler expiration check. Seluruh tes monorepo (143 tes) berhasil lulus cleanly.
+- **Pengujian Terotomatisasi (Vitest Suite)**: Membuat berkas tes integrasi baru `apps/api/src/features/notifications/__tests__/notifications.test.ts` (13 tes) untuk memvalidasi default preferensi user baru, fungsionalitas email queue/socket stream, pembacaan, dan scheduler expiration check. Seluruh tes monorepo (143 tes) berhasil lulus cleanly.### 5.14 Antarmuka Pengguna & Web App Frontend (Phase 1 MVP - Web Layouts & Features)
+Kami merancang dan mengimplementasikan aplikasi frontend web (`apps/web`) berbasis React + Vite yang terintegrasi penuh dengan seluruh endpoints backend:
+- **Axios HTTP Client & Silent Refresh Interceptor (`lib/api-client.ts`)**:
+  - Mengonfigurasi instance Axios kustom dengan penanganan header `Authorization` dan `X-Org-Id` secara otomatis.
+  - Menggunakan interceptor respons untuk menangani error `401 Unauthorized` dengan memicu silent token refresh via `/auth/refresh` secara transparan di latar belakang.
+  - Mengimplementasikan failed requests queue buffer untuk menampung request yang gagal saat token sedang diperbarui, lalu mengirimkannya kembali secara berurutan setelah token baru berhasil diperoleh.
+- **Zustand State Stores & Socket.IO Synchronization**:
+  - `auth.store.ts` & `org.store.ts`: State management global yang ringan dan responsif untuk mengelola data sesi pengguna (termasuk status MFA), organisasi aktif, dan daftar organisasi.
+  - `socket.ts` sinkron dengan store Zustand: mendengarkan perubahan token akses untuk memicu koneksi ulang (reconnect) Socket.IO dan masuk ke room organisasi terkait secara dinamis.
+- **Guard Router & Shell Layout Layouts**:
+  - `<ProtectedRoute>` dan `<PublicRoute>` untuk memproteksi akses halaman berdasarkan status login dan verifikasi MFA.
+  - `AppLayout.tsx`: Menyediakan sidebar premium, panel atas dengan dropdown pengganti organisasi aktif (Workspace Switcher), dan menu profil pengguna.
+  - `NotificationDrawer.tsx`: Sidebar drawer sisi kanan yang mendengarkan event Socket.IO (`notification:received` dan `notification:unread_count_updated`) untuk menampilkan notifikasi real-time dan lencana counter unread secara dinamis.
+- **Slicing Fitur Lengkap**:
+  - **Auth & MFA**: Halaman Login dengan input MFA OTP inline kondisional, halaman Registrasi, serta Modal MFA Settings untuk setup TOTP (menampilkan QR Code) dan backup recovery codes.
+  - **Projects & Secrets Manager**: Dashboard proyek dalam grid card premium, form wizard pembuatan proyek, serta Project Details Page dengan tab Environments. Menyediakan tabel manajemen environment variables dengan fitur enkripsi secrets, reveal value overlay (memicu audit logs), dan dialog riwayat versi rahasia serta tombol rollback.
+  - **Live Terminal Logs**: Halaman detail deployment dengan komponen terminal hitam bergaya retro yang mengalirkan logs build secara real-time via Socket.IO (`deployment:log` events) serta tombol persetujuan manual (approval gate) untuk administrator.
+  - **API Keys & Webhooks**: Manajemen API keys dengan filter lingkungan dan penyalinan kunci base58 baru, serta formulir webhook destinations dan drawer deliveries history log.
+  - **Audit Logs Explorer**: Tabel interaktif log audit dengan pagination, filter aktor, aksi, resource, dan status (success/failure).
+  - **Analytics & DORA Metrics**: Visualisasi data Lead Time, Deployment Frequency, Failure Rate, dan tren build harian menggunakan diagram garis berbasis inline vector SVG responsif tanpa library eksternal demi styling terpadu yang premium.
+
+### 5.15 Perbaikan Sesi Hilang (F5 Refresh) & Sinkronisasi Workspace (Bug Fixes)
+Kami mengidentifikasi dan menyelesaikan masalah di mana sesi pengguna hilang setelah melakukan refresh F5 dan kegagalan login kembali:
+- **Deduplikasi Pemanggilan Refresh Token (`lib/api-client.ts`)**:
+  - Memperkenalkan fungsi global `refreshSession()` yang menampung promise refresh aktif dalam variabel `refreshPromise`.
+  - Jika ada pemanggilan konkruen ke `/auth/refresh` (seperti yang terjadi dua kali secara bersamaan karena React StrictMode di `App.tsx` saat mount), pemanggilan berikutnya akan langsung menggunakan promise yang sama.
+  - Ini mencegah pengiriman beberapa HTTP request refresh secara bersamaan ke server, yang sebelumnya memicu Token Reuse Detection (RTR) di backend dan membatalkan seluruh sesi pengguna.
+  - Menyederhanakan response interceptor Axios dengan memanfaatkan `refreshSession()` yang secara otomatis mengurus pembersihan sesi jika terjadi kegagalan.
+- **Pembaruan Konteks Workspace di Backend (`AppLayout.tsx`)**:
+  - Di dalam fungsi `handleCreateOrg`, sesaat setelah workspace baru berhasil dibuat, sistem kini secara otomatis memicu pemanggilan `POST /auth/switch-org` ke backend untuk mengganti organisasi aktif di tingkat server.
+  - Ini memastikan token akses baru dan refresh token di-regenerasi dengan klaim `orgId` organisasi baru, menyelaraskan state backend and frontend secara instan sebelum penyegaran halaman dilakukan.
+- **Penyempurnaan Autofill Otentikasi (`LoginPage.tsx` & `RegisterPage.tsx`)**:
+  - Menambahkan atribut standard HTML `name` dan `autoComplete` pada seluruh input formulir (Email, Password, MFA, Name).
+  - Ini memastikan pengelola kata sandi peramban dapat memetakan, menyimpan, dan mengisi kredensial dengan benar saat dialihkan kembali ke login, mencegah kesalahan pengetikan kata sandi.
+- **Fitur Ubah Nilai Secret (Pencil Icon & Edit Modal di `ProjectDetailPage.tsx`)**:
+  - Menambahkan tombol edit (ikon Pencil) pada setiap baris tabel Secrets.
+  - Tombol ini membuka modal "Update Secret Value" yang mengirimkan request `PATCH /projects/:projectId/secrets/:secretId` berisi `{ value }` ke backend.
+  - Ini memungkinkan pengguna mengubah nilai rahasia lama tanpa harus menghapusnya, mempertahankan silsilah riwayat versi (*version history*) secara penuh.
+
+### 5.16 Perbaikan Fitur Rollback & Komponen Kustom Confirmation Dialog (Bug Fixes)
+Kami merancang dan mengimplementasikan perbaikan pada fitur rollback secret serta membangun komponen dialog konfirmasi kustom yang premium:
+- **Koreksi Parameter Body Rollback**:
+  - Memperbaiki data yang dikirimkan ke endpoint `POST /api/v1/projects/:projectId/secrets/:secretId/rollback`.
+  - Sebelumnya, frontend mengirimkan `{ versionId }` (string hash ID internal). Kami menyesuaikannya untuk mengirimkan `{ version: version.version }` (angka/number) sesuai spesifikasi validator schema backend yang mewajibkan input bertipe integer positif.
+- **Komponen Kustom Reusable `ConfirmationDialog` (`ConfirmationDialog.tsx`)**:
+  - Membuat komponen dialog konfirmasi baru yang elegan dengan styling glassmorphism (`backdrop-blur-sm bg-black/75`), border tipis (`border-white/10`), zoom in-out transitions, dan penanda icon kustom berdasarkan tipenya (`danger` | `warning` | `info` | `success`).
+  - Mendukung spinner pemuatan (`Loader2`) pada tombol aksi utama ketika proses pengolahan data asinkron sedang aktif (`isLoading`).
+  - Menyelaraskan propopsional opsional TypeScript agar kompatibel dengan strict option `exactOptionalPropertyTypes: true` yang terdefinisi pada konfigurasi compiler proyek.
+- **Integrasi Dialog Konfirmasi di Seluruh Dashboard Proyek**:
+  - Merefaktor fungsi `handleRollback` dan `handleDeleteSecret` pada [ProjectDetailPage.tsx](file:///Users/timurdianradhasejati/Programming/Code/Web/Mern/seladev/apps/web/src/features/projects/components/ProjectDetailPage.tsx) untuk menggunakan komponen konfirmasi kustom yang baru, meniadakan dialog browser `window.confirm` tradisional demi standarisasi estetika aplikasi yang premium.
 
 ---
 
@@ -327,4 +376,3 @@ Kami merancang dan mengimplementasikan Sistem Notifikasi menyeluruh berbasis rea
    ```
    - API Server: `http://localhost:4000`
    - Web App: `http://localhost:3000` (atau port 5173 jika berjalan standalone)
-

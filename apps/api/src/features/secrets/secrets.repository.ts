@@ -128,7 +128,10 @@ export class MongooseSecretsRepository implements SecretsRepository {
   async listSecretVersions(secretId: string): Promise<SecretVersionDocument[]> {
     return SecretVersionModel.find({
       secretId: new mongoose.Types.ObjectId(secretId),
-    }).sort({ version: -1 }).exec();
+    })
+      .sort({ version: -1 })
+      .populate('createdBy', 'firstName lastName')
+      .exec();
   }
 
   async deleteSecretVersions(secretId: string): Promise<boolean> {

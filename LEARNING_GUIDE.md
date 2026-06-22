@@ -27,6 +27,7 @@ Dokumen ini dirancang sebagai panduan belajar interaktif untuk membantu Anda mem
 20. [Modul Analytics Dashboard & Agregasi MongoDB](#20-modul-analytics-dashboard--agregasi-mongodb-phase-33)
 21. [Modul Team Workspaces & Multi-Tenancy Dinamis](#21-modul-team-workspaces--multi-tenancy-dinamis-phase-34)
 22. [Modul Sistem Notifikasi, Preferensi, & Expiration Checks](#22-modul-sistem-notifikasi-preferensi--expiration-checks-phase-18--phase-38)
+23. [Arsitektur Aplikasi Frontend Web (React, Zustand, & Socket.IO)](#23-arsitektur-aplikasi-frontend-web-react-zustand--socketio)
 
 ---
 
@@ -908,5 +909,33 @@ Salah satu risiko kebocoran data terbesar adalah kunci API dan Secrets yang dibi
   - Untuk **Secrets**, sistem mencari semua administrator proyek (`role: 'admin'`) dalam daftar keanggotaan proyek dan mengirimkan notifikasi.
   - Untuk **API Keys**, jika bertipe proyek, ia mendistribusikan ke admin proyek; jika bertipe organisasi, ia mendistribusikannya ke seluruh administrator organisasi (`owner`/`admin` aktif).
 - **Single-Notification Lock**: Setelah notifikasi dikirimkan, flag `expiryNotified` di-set menjadi `true` di database sehingga cron job di hari berikutnya tidak akan mengirimkan notifikasi duplikat ke pengguna yang sama.
+## 23. Arsitektur Aplikasi Frontend Web (React, Zustand, & Socket.IO)
 
+Bagian ini membahas arsitektur frontend web (`apps/web`) berbasis React + Vite + CSS kustom, pola pengelolaan session dan refresh token secara senyap (silent refresh), sinkronisasi client Socket.IO, dan visualisasi grafis SVG mandiri.
 
+### A. HTTP Client & Silent Refresh Interceptor
+Untuk menjamin keamanan tanpa mengganggu kenyamanan pengguna (DX), token akses berumur pendek (15 menit) dan diperbarui secara otomatis menggunakan Refresh Token:
+1. **Penyimpanan Token**: Access token JWT disimpan di dalam memori frontend (Zustand store), sedangkan refresh token disimpan di dalam cookie berproteksi `HttpOnly` di browser untuk menghindari serangan XSS.
+2. **Axios Interceptor**: Instance Axios (`api-client.ts`) mencegat setiap respons API. Jika server mengembalikan error `401 Unauthorized`, interceptor akan menahan request tersebut ke dalam antrean tunggu (`failedQueue`) dan memicu request pembaruan token ke `/auth/refresh`.
+3. **Penyelarasan Request**: Jika pembaruan token berhasil, semua request di dalam antrean dikirim kembali dengan header `Authorization` yang baru. Jika gagal, sesi dibersihkan dan pengguna diarahkan ke halaman login.
+
+### B. Pola State Management Zustand
+Zustand digunakan karena performa render-nya yang cepat dan sintaksisnya yang minimalis dibanding Redux:
+- **`AuthStore`**: Mengelola data user profile, access token, status verifikasi MFA, dan state inisialisasi sesi (`isInitialized`).
+- **`OrgStore`**: Mengelola organisasi aktif (`activeOrgId`) dan daftar seluruh organisasi yang diikuti oleh user.
+- **Header `X-Org-Id` Otomatis**: Setiap kali data diambil via Axios, client secara otomatis menyematkan header `X-Org-Id` dengan nilai `activeOrgId` yang diambil dari Zustand store untuk menjaga batasan multi-tenant.
+
+### C. Re-Autentikasi Socket.IO Dinamis
+Untuk menjaga kestabilan aliran notifikasi real-time dan logs build:
+- **Client Socket (`socket.ts`)**: Mengawasi store Zustand. Saat access token berubah (misalnya setelah switch organization atau token refresh), client Socket.IO akan secara otomatis terhubung kembali (`reconnect`) dan mengirimkan token yang baru dalam handshake data payload.
+- **Penyelarasan Room**: Backend memanfaatkan token baru tersebut untuk mendaftarkan ulang socket koneksi pengguna ke room organisasi yang baru (`org:${orgId}`).
+
+### D. Live Terminal Streaming & Approval Gate
+Antarmuka build log dirancang menyerupai terminal hitam retro:
+1. **Socket Event Streaming**: Komponen `DeploymentDetailPage` mendengarkan event `deployment:log`. Log baru yang dipancarkan oleh worker BullMQ langsung dimasukkan ke baris terminal secara bertransparan dan memicu auto-scroll ke bawah.
+2. **Manual Approval Gate UI**: Jika deployment tertahan pada status `pending_approval`, admin proyek/organisasi akan disajikan tombol interaktif untuk mengirim aksi persetujuan (`approve`) atau penolakan (`reject`) langsung dari antarmuka web.
+
+### E. DORA Metrics & Diagram SVG Ringan (Zero-Dependency Visuals)
+Untuk mematuhi aturan visual premium tanpa membebani ukuran bundle aplikasi:
+- **DORA Cards**: Menghitung secara real-time Lead Time, Deployment Frequency, dan Failure Rate.
+- **Inline SVG Graphing**: Alih-alih mengimpor pustaka diagram yang besar seperti Chart.js atau Recharts, frontend memproses deretan array data menjadi koordinat grafik garis `<svg>`, memanfaatkan path kurva kustom (`<path d="..." />`), dan memberikan sentuhan animasi gradient halus agar terlihat hidup dan estetis.

@@ -60,7 +60,16 @@ const SecretVersionSchema = new Schema<SecretVersionDocument>(
         obj.id = obj._id.toString();
         obj.secretId = obj.secretId.toString();
         obj.organizationId = obj.organizationId.toString();
-        obj.createdBy = obj.createdBy.toString();
+        if (obj.createdBy) {
+          if (typeof obj.createdBy === 'object' && (obj.createdBy._id || obj.createdBy.firstName)) {
+            obj.createdBy = {
+              id: (obj.createdBy._id || obj.createdBy.id || '').toString(),
+              name: `${obj.createdBy.firstName || ''} ${obj.createdBy.lastName || ''}`.trim() || 'Unknown',
+            };
+          } else {
+            obj.createdBy = obj.createdBy.toString();
+          }
+        }
         delete obj._id;
         delete obj.__v;
         delete obj.encryptedValue;

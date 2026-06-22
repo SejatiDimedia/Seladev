@@ -15,6 +15,13 @@ export class AuthService {
     private readonly auditLogsService?: AuditLogsService
   ) {}
 
+  private getOrgId(membership: any): string {
+    if (!membership) return '';
+    const org = membership.organizationId;
+    if (!org) return '';
+    return typeof org === 'object' && '_id' in org ? org._id.toString() : org.toString();
+  }
+
   async register(dto: RegisterDto): Promise<User> {
     const existingUser = await this.authRepo.findUserByEmail(dto.email);
     if (existingUser) {
@@ -87,7 +94,7 @@ export class AuthService {
     if (!isPasswordValid) {
       if (this.auditLogsService) {
         const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
-        const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+        const orgId = this.getOrgId(membership) || '000000000000000000000000';
         this.auditLogsService.record({
           organizationId: orgId,
           action: 'auth.login_failed',
@@ -121,7 +128,7 @@ export class AuthService {
 
     // Check for active organization membership
     const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
-    const orgId = membership ? membership.organizationId.toString() : '';
+    const orgId = this.getOrgId(membership);
     const role = membership ? membership.role : 'none';
 
     // Generate tokens
@@ -201,7 +208,7 @@ export class AuthService {
     await tokenDoc.save();
 
     const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
-    const orgId = membership ? membership.organizationId.toString() : '';
+    const orgId = this.getOrgId(membership);
     const role = membership ? membership.role : 'none';
 
     const accessToken = signAccessToken({
@@ -280,7 +287,7 @@ export class AuthService {
 
     if (this.auditLogsService) {
       const membership = await this.authRepo.findFirstActiveMembership(userId);
-      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      const orgId = this.getOrgId(membership) || '000000000000000000000000';
       this.auditLogsService.record({
         organizationId: orgId,
         action: 'auth.password_changed',
@@ -332,7 +339,7 @@ export class AuthService {
     await userDoc.save();
 
     const membership = await this.authRepo.findFirstActiveMembership(userDoc.id);
-    const orgId = membership ? membership.organizationId.toString() : '';
+    const orgId = this.getOrgId(membership);
     const role = membership ? membership.role : 'none';
 
     const accessToken = signAccessToken({
@@ -432,7 +439,7 @@ export class AuthService {
 
     if (this.auditLogsService) {
       const membership = await this.authRepo.findFirstActiveMembership(userId);
-      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      const orgId = this.getOrgId(membership) || '000000000000000000000000';
       this.auditLogsService.record({
         organizationId: orgId,
         action: 'auth.mfa.enabled',
@@ -491,7 +498,7 @@ export class AuthService {
 
     if (this.auditLogsService) {
       const membership = await this.authRepo.findFirstActiveMembership(userId);
-      const orgId = membership ? membership.organizationId.toString() : '000000000000000000000000';
+      const orgId = this.getOrgId(membership) || '000000000000000000000000';
       this.auditLogsService.record({
         organizationId: orgId,
         action: 'auth.mfa.disabled',
